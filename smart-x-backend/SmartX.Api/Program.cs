@@ -1,8 +1,15 @@
+using SmartX.Api.Data;
+using SmartX.Api.Logic;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+
+// Register application layers.
+builder.Services.AddScoped<ITestRepository, TestRepository>();
+builder.Services.AddScoped<ITestService, TestService>();
 
 builder.Services.AddCors(options =>
 {

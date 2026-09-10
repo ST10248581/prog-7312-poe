@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using SmartX.Api.Logic;
 
 namespace SmartX.Api.Controllers;
 
@@ -6,14 +7,17 @@ namespace SmartX.Api.Controllers;
 [Route("api/[controller]")]
 public class TestController : ControllerBase
 {
+    private readonly ITestService _testService;
+
+    public TestController(ITestService testService)
+    {
+        _testService = testService;
+    }
+
     [HttpGet]
     public IActionResult Get()
     {
-        return Ok(new
-        {
-            status = "ok",
-            message = "Smart-X API is running",
-            timestamp = DateTime.UtcNow
-        });
+        var result = _testService.GetStatus();
+        return Ok(result);
     }
 }
