@@ -18,6 +18,16 @@ builder.Services.AddOpenApi();
 builder.Services.AddScoped<ITestRepository, TestRepository>();
 builder.Services.AddScoped<ITestService, TestService>();
 
+builder.Services.AddScoped<ISensorProfileRepository, SensorProfileRepository>();
+builder.Services.AddScoped<ITelemetryRepository, TelemetryRepository>();
+builder.Services.AddScoped<IAlertRepository, AlertRepository>();
+builder.Services.AddScoped<IEngagementRepository, EngagementRepository>();
+
+builder.Services.AddScoped<ISensorService, SensorService>();
+builder.Services.AddScoped<ITelemetryService, TelemetryService>();
+builder.Services.AddScoped<IAlertService, AlertService>();
+builder.Services.AddScoped<IEngagementService, EngagementService>();
+
 // In-memory data store and demo data seeding.
 builder.Services.AddSingleton<SeedOptions>();
 builder.Services.AddSingleton<ISmartXDataStore, SmartXDataStore>();

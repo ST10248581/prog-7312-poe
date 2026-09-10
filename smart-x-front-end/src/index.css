@@ -134,7 +134,60 @@ code {
   background: var(--text-muted);
 }
 
-/* Responsive typography */
+/* ============================================================
+   Responsive
+   Every breakpoint in the app lives here, so layout behaviour is
+   read and changed in one place rather than per component sheet.
+
+   Breakpoints:
+     1180px  dashboard drops to a single column
+     1024px  navigation stacks
+      768px  tablet / small laptop
+      480px  phone
+
+   Selectors are scoped one level deeper than the component rules
+   they override (.telemetry-page .x, nav.navbar). index.css is
+   imported first, so equal-specificity rules here would otherwise
+   lose to the component sheets that load after it.
+   ============================================================ */
+
+/* ---------- 1180px: dashboard stacks ---------- */
+
+@media (max-width: 1180px) {
+  .telemetry-page .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .telemetry-page .alert-feed {
+    position: static;
+  }
+}
+
+/* ---------- 1024px: navigation stacks ---------- */
+
+@media (max-width: 1024px) {
+  nav.navbar {
+    height: auto;
+    flex-direction: column;
+    padding: 0.75rem 1rem;
+    gap: 0.625rem;
+  }
+
+  .navbar .navbar-nav {
+    width: 100%;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .navbar .nav-link {
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.8125rem;
+  }
+}
+
+/* ---------- 768px: tablet ---------- */
+
 @media (max-width: 768px) {
   html {
     font-size: 15px;
@@ -143,7 +196,59 @@ code {
   h1 { font-size: 1.5rem; }
   h2 { font-size: 1.25rem; }
   h3 { font-size: 1rem; }
+
+  div.telemetry-page {
+    padding: 1rem;
+  }
+
+  .telemetry-page .filter-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  /* The page scrolls at this width, so the grid no longer needs its own. */
+  .telemetry-page .sensor-grid {
+    max-height: none;
+  }
+
+  .telemetry-page .detail-tab-body {
+    max-height: none;
+  }
+
+  .app-content .coming-soon {
+    padding: 2rem 1rem;
+  }
+
+  .app-content .coming-soon-icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .app-content .coming-soon h2 {
+    font-size: 1.25rem;
+  }
+
+  .app-content .coming-soon-feature,
+  .app-content .coming-soon p {
+    font-size: 0.875rem;
+  }
+
+  .app-content .coming-soon::after {
+    width: 200px;
+    height: 200px;
+  }
+
+  /* Give the dialog nearly the full viewport on a small screen. */
+  .telemetry-page .modal-backdrop {
+    padding: 1rem 0.75rem;
+  }
+
+  .telemetry-page .modal-dialog {
+    height: 92vh;
+  }
 }
+
+/* ---------- 480px: phone ---------- */
 
 @media (max-width: 480px) {
   html {
@@ -151,4 +256,25 @@ code {
   }
 
   h1 { font-size: 1.375rem; }
+
+  .navbar {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .navbar .nav-link {
+    font-size: 0.75rem;
+    padding: 0.5rem 0.625rem;
+  }
+
+  .telemetry-page .modal-backdrop {
+    padding: 0.5rem;
+  }
+
+  .telemetry-page .modal-dialog {
+    height: 95vh;
+  }
+
+  .telemetry-page .detail-facts {
+    grid-template-columns: 1fr 1fr;
+  }
 }
