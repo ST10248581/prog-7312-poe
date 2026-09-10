@@ -1,15 +1,34 @@
+using System.Text.Json.Serialization;
 using SmartX.Api.Data;
+using SmartX.Api.Data.Seeding;
 using SmartX.Api.Logic;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Send enums to the frontend as names ("Warning") rather than numbers.
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
 builder.Services.AddOpenApi();
 
 // Register application layers.
 builder.Services.AddScoped<ITestRepository, TestRepository>();
 builder.Services.AddScoped<ITestService, TestService>();
+
+// In-memory data store and demo data seeding.
+builder.Services.AddSingleton<SeedOptions>();
+builder.Services.AddSingleton<ISmartXDataStore, SmartXDataStore>();
+builder.Services.AddSingleton<ISensorProfileSeeder, SensorProfileSeeder>();
+builder.Services.AddSingleton<ISensorThresholdSeeder, SensorThresholdSeeder>();
+builder.Services.AddSingleton<ITelemetryReadingSeeder, TelemetryReadingSeeder>();
+builder.Services.AddSingleton<IAlertSeeder, AlertSeeder>();
+builder.Services.AddSingleton<ISensorAttachmentSeeder, SensorAttachmentSeeder>();
+builder.Services.AddSingleton<IIngestionBatchSeeder, IngestionBatchSeeder>();
+builder.Services.AddSingleton<IEngagementStateSeeder, EngagementStateSeeder>();
+builder.Services.AddSingleton<IDataSeeder, DataSeeder>();
 
 builder.Services.AddCors(options =>
 {
@@ -22,6 +41,9 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Populate the in-memory store before the first request is served.
+app.Services.GetRequiredService<IDataSeeder>().SeedAll();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
