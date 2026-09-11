@@ -214,6 +214,23 @@ export interface SensorFilters {
   anomaliesOnly?: boolean;
 }
 
+export interface UpdateSensorPayloadRequest {
+  macAddress: string;
+  room: string;
+  zone: string;
+  nodeId: string;
+  category: SensorCategory;
+}
+
+export interface CreateSensorRequest {
+  name: string;
+  macAddress: string;
+  room: string;
+  zone: string;
+  nodeId: string;
+  category: SensorCategory;
+}
+
 /* ---------- Plumbing ---------- */
 
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -324,6 +341,54 @@ export async function getEngagement(userId?: string): Promise<EngagementState> {
   return handleResponse<EngagementState>(response);
 }
 
+export async function createSensor(
+  request: CreateSensorRequest
+): Promise<SensorProfile> {
+  const response = await fetch(`${API_BASE_URL}/sensors`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<SensorProfile>(response);
+}
+
+export async function updateSensorPayload(
+  id: string,
+  payload: UpdateSensorPayloadRequest
+): Promise<SensorProfile> {
+  const response = await fetch(`${API_BASE_URL}/sensors/${id}/payload`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<SensorProfile>(response);
+}
+
+export async function uploadAttachment(
+  sensorId: string,
+  file: File,
+  attachmentType: AttachmentType,
+  description: string
+): Promise<SensorAttachment> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("attachmentType", attachmentType);
+  formData.append("description", description);
+
+  const response = await fetch(
+    `${API_BASE_URL}/sensors/${sensorId}/attachments`,
+    { method: "POST", body: formData }
+  );
+  return handleResponse<SensorAttachment>(response);
+}
+
+export function getAttachmentDownloadUrl(
+  sensorId: string,
+  attachmentId: string
+): string {
+  return `${API_BASE_URL}/sensors/${sensorId}/attachments/${attachmentId}/download`;
+}
+
 export default {
   testConnection,
   getSummary,
@@ -334,4 +399,8 @@ export default {
   getReadings,
   getAlerts,
   getEngagement,
+  createSensor,
+  updateSensorPayload,
+  uploadAttachment,
+  getAttachmentDownloadUrl,
 };

@@ -16,5 +16,7 @@ public interface ISmartXDataStore
     List<IngestionBatch> IngestionBatches { get; }
     List<EngagementState> EngagementStates { get; }
 
+    Dictionary<Guid, byte[]> AttachmentFiles { get; }
+
     long NextTelemetryReadingId();
 }

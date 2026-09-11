@@ -1,4 +1,5 @@
 using SmartX.Api.Models;
+using SmartX.Api.Models.Requests;
 using SmartX.Api.Models.Responses;
 
 namespace SmartX.Api.Data;
@@ -109,6 +110,76 @@ public class SensorProfileRepository : ISensorProfileRepository
             Zones = _store.SensorProfiles.Select(sensor => sensor.Zone).Distinct().Order().ToList(),
             Rooms = _store.SensorProfiles.Select(sensor => sensor.Room).Distinct().Order().ToList()
         };
+    }
+
+    public SensorProfile? UpdatePayload(Guid id, UpdateSensorPayloadRequest request)
+    {
+        var sensor = _store.SensorProfiles.FirstOrDefault(profile => profile.Id == id);
+        if (sensor is null)
+        {
+            return null;
+        }
+
+        sensor.MacAddress = request.MacAddress;
+        sensor.Room = request.Room;
+        sensor.Zone = request.Zone;
+        sensor.NodeId = request.NodeId;
+        sensor.Category = request.Category;
+
+        return sensor;
+    }
+
+    public SensorProfile Create(CreateSensorRequest request)
+    {
+        var sensor = new SensorProfile
+        {
+            Id = Guid.NewGuid(),
+            Name = request.Name,
+            MacAddress = request.MacAddress,
+            SerialNumber = $"SN-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}",
+            Room = request.Room,
+            Zone = request.Zone,
+            NodeId = request.NodeId,
+            Category = request.Category,
+            Status = SensorStatus.Offline,
+            FirmwareVersion = "1.0.0",
+            RegisteredUtc = DateTime.UtcNow,
+            LastSeenUtc = DateTime.UtcNow,
+            IsActive = true
+        };
+
+        _store.SensorProfiles.Add(sensor);
+        return sensor;
+    }
+
+    public SensorAttachment AddAttachment(Guid sensorId, SensorAttachment attachment, byte[] fileData)
+    {
+        attachment.SensorProfileId = sensorId;
+        _store.SensorAttachments.Add(attachment);
+        _store.AttachmentFiles[attachment.Id] = fileData;
+        return attachment;
+    }
+
+    public (SensorAttachment attachment, byte[] fileData)? GetAttachmentFile(Guid sensorId, Guid attachmentId)
+    {
+        var attachment = _store.SensorAttachments
+            .FirstOrDefault(a => a.Id == attachmentId && a.SensorProfileId == sensorId);
+
+        if (attachment is null)
+        {
+            return null;
+        }
+
+        if (!_store.AttachmentFiles.TryGetValue(attachmentId, out var fileData))
+        {
+            // Seeded attachments have no stored bytes — return a placeholder.
+            fileData = System.Text.Encoding.UTF8.GetBytes(
+                $"[placeholder] {attachment.FileName} — {attachment.FileSizeBytes} bytes\n" +
+                $"Type: {attachment.AttachmentType}\n" +
+                $"Uploaded: {attachment.UploadedUtc:u}\n");
+        }
+
+        return (attachment, fileData);
     }
 
     private SensorListItem BuildListItem(SensorProfile sensor, DateTime cutoff)

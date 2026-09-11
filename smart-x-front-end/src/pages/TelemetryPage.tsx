@@ -20,6 +20,7 @@ import AlertFeed from "../components/telemetry/AlertFeed";
 import ConfigurationProgress from "../components/telemetry/ConfigurationProgress";
 import FilterBar from "../components/telemetry/FilterBar";
 import SensorCard from "../components/telemetry/SensorCard";
+import RegisterSensorModal from "../components/telemetry/RegisterSensorModal";
 import SensorDetailModal from "../components/telemetry/SensorDetailModal";
 import StatTile from "../components/telemetry/StatTile";
 import { formatCompact, formatNumber, formatTime } from "../utils/format";
@@ -42,6 +43,7 @@ function TelemetryPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [showRegister, setShowRegister] = useState(false);
 
   // Tracks the most recently requested node so a slow response for a previously
   // selected sensor cannot overwrite the current one.
@@ -121,6 +123,23 @@ function TelemetryPage() {
     setSelectedId(null);
     setDetail(null);
   }, []);
+
+  const handlePayloadUpdated = useCallback((updatedDetail: SensorDetail) => {
+    setDetail(updatedDetail);
+    // Refresh the sensor grid so cards reflect the updated fields
+    loadDashboard(filters);
+  }, [loadDashboard, filters]);
+
+  const handleDetailRefresh = useCallback(() => {
+    if (selectedId) {
+      handleSelect(selectedId);
+    }
+  }, [selectedId, handleSelect]);
+
+  const handleSensorRegistered = useCallback(() => {
+    loadDashboard(filters);
+    getFilterOptions().then(setOptions).catch(() => undefined);
+  }, [loadDashboard, filters]);
 
   const healthTone =
     !summary || summary.meshHealthScore >= 85
@@ -228,9 +247,18 @@ function TelemetryPage() {
         <section className="sensor-panel" aria-label="Sensors">
           <header className="panel-head">
             <h2>Mesh nodes</h2>
-            <span className="panel-head-count">
-              {loading ? "loading…" : `${sensors.length} shown`}
-            </span>
+            <div className="panel-head-actions">
+              <button
+                type="button"
+                className="register-btn"
+                onClick={() => setShowRegister(true)}
+              >
+                + Register Device
+              </button>
+              <span className="panel-head-count">
+                {loading ? "loading…" : `${sensors.length} shown`}
+              </span>
+            </div>
           </header>
 
           <div className="sensor-grid">
@@ -264,6 +292,15 @@ function TelemetryPage() {
           detail={detail}
           loading={detailLoading}
           onClose={handleCloseDetail}
+          onPayloadUpdated={handlePayloadUpdated}
+          onDetailRefresh={handleDetailRefresh}
+        />
+      )}
+
+      {showRegister && (
+        <RegisterSensorModal
+          onClose={() => setShowRegister(false)}
+          onRegistered={handleSensorRegistered}
         />
       )}
     </div>

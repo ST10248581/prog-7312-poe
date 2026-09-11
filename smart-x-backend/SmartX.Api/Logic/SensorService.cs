@@ -1,5 +1,6 @@
 using SmartX.Api.Data;
 using SmartX.Api.Models;
+using SmartX.Api.Models.Requests;
 using SmartX.Api.Models.Responses;
 
 namespace SmartX.Api.Logic;
@@ -43,5 +44,49 @@ public class SensorService : ISensorService
     public FilterOptions GetFilterOptions()
     {
         return _sensorProfileRepository.GetFilterOptions();
+    }
+
+    public SensorProfile? UpdateSensorPayload(Guid id, UpdateSensorPayloadRequest request)
+    {
+        return _sensorProfileRepository.UpdatePayload(id, request);
+    }
+
+    public SensorProfile CreateSensor(CreateSensorRequest request)
+    {
+        return _sensorProfileRepository.Create(request);
+    }
+
+    public SensorAttachment? UploadAttachment(Guid sensorId, IFormFile file, AttachmentType attachmentType, string description)
+    {
+        var sensor = _sensorProfileRepository.GetDetail(sensorId);
+        if (sensor is null)
+        {
+            return null;
+        }
+
+        using var memoryStream = new MemoryStream();
+        file.CopyTo(memoryStream);
+        var fileData = memoryStream.ToArray();
+
+        var attachment = new SensorAttachment
+        {
+            Id = Guid.NewGuid(),
+            SensorProfileId = sensorId,
+            FileName = file.FileName,
+            StoredFileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}",
+            ContentType = file.ContentType,
+            FileSizeBytes = file.Length,
+            AttachmentType = attachmentType,
+            UploadedUtc = DateTime.UtcNow,
+            UploadedBy = "user",
+            Description = description
+        };
+
+        return _sensorProfileRepository.AddAttachment(sensorId, attachment, fileData);
+    }
+
+    public (SensorAttachment attachment, byte[] fileData)? DownloadAttachment(Guid sensorId, Guid attachmentId)
+    {
+        return _sensorProfileRepository.GetAttachmentFile(sensorId, attachmentId);
     }
 }

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using SmartX.Api.Logic;
 using SmartX.Api.Models;
+using SmartX.Api.Models.Requests;
 
 namespace SmartX.Api.Controllers;
 
@@ -47,5 +48,48 @@ public class SensorsController : ControllerBase
     public IActionResult GetFilterOptions()
     {
         return Ok(_sensorService.GetFilterOptions());
+    }
+
+    /// <summary>Register a new sensor device.</summary>
+    [HttpPost]
+    public IActionResult CreateSensor([FromBody] CreateSensorRequest request)
+    {
+        var sensor = _sensorService.CreateSensor(request);
+        return CreatedAtAction(nameof(GetSensor), new { id = sensor.Id }, sensor);
+    }
+
+    /// <summary>Update the sensor payload / registration fields.</summary>
+    [HttpPut("{id:guid}/payload")]
+    public IActionResult UpdatePayload(Guid id, [FromBody] UpdateSensorPayloadRequest request)
+    {
+        var updated = _sensorService.UpdateSensorPayload(id, request);
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
+    /// <summary>Upload a file attachment to a sensor profile.</summary>
+    [HttpPost("{sensorId:guid}/attachments")]
+    [RequestSizeLimit(10 * 1024 * 1024)]
+    public IActionResult UploadAttachment(
+        Guid sensorId,
+        [FromForm] IFormFile file,
+        [FromForm] AttachmentType attachmentType,
+        [FromForm] string description = "")
+    {
+        var attachment = _sensorService.UploadAttachment(sensorId, file, attachmentType, description);
+        return attachment is null ? NotFound() : Created($"api/sensors/{sensorId}/attachments/{attachment.Id}", attachment);
+    }
+
+    /// <summary>Download an attachment file.</summary>
+    [HttpGet("{sensorId:guid}/attachments/{attachmentId:guid}/download")]
+    public IActionResult DownloadAttachment(Guid sensorId, Guid attachmentId)
+    {
+        var result = _sensorService.DownloadAttachment(sensorId, attachmentId);
+        if (result is null)
+        {
+            return NotFound();
+        }
+
+        var (attachment, fileData) = result.Value;
+        return File(fileData, attachment.ContentType, attachment.FileName);
     }
 }

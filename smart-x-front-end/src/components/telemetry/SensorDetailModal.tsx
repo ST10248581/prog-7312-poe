@@ -6,13 +6,15 @@ interface SensorDetailModalProps {
   detail: SensorDetail | null;
   loading: boolean;
   onClose: () => void;
+  onPayloadUpdated?: (updatedDetail: SensorDetail) => void;
+  onDetailRefresh?: () => void;
 }
 
 /**
  * Details on demand, presented as a modal so the overview underneath keeps its
  * scroll position and context while one node is investigated.
  */
-function SensorDetailModal({ detail, loading, onClose }: SensorDetailModalProps) {
+function SensorDetailModal({ detail, loading, onClose, onPayloadUpdated, onDetailRefresh }: SensorDetailModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,7 +53,7 @@ function SensorDetailModal({ detail, loading, onClose }: SensorDetailModalProps)
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
-        <SensorDetailPanel detail={detail} loading={loading} onClose={onClose} />
+        <SensorDetailPanel detail={detail} loading={loading} onClose={onClose} onPayloadUpdated={onPayloadUpdated} onDetailRefresh={onDetailRefresh} />
       </div>
     </div>
   );

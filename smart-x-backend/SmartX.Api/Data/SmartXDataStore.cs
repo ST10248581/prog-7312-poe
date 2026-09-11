@@ -14,6 +14,8 @@ public class SmartXDataStore : ISmartXDataStore
     public List<IngestionBatch> IngestionBatches { get; } = new();
     public List<EngagementState> EngagementStates { get; } = new();
 
+    public Dictionary<Guid, byte[]> AttachmentFiles { get; } = new();
+
     public long NextTelemetryReadingId()
     {
         return Interlocked.Increment(ref _telemetryReadingId);
