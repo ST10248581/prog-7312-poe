@@ -1468,3 +1468,321 @@ select.payload-input {
   max-height: 88vh;
 }
 
+
+/* ---------- Mesh topology and deployment ---------- */
+
+.mesh-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.mesh-error {
+  font-size: 0.8125rem;
+  color: var(--danger);
+}
+
+.mesh-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .mesh-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mesh-tree-panel,
+.mesh-side {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.875rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.mesh-sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mesh-sub-head h3 {
+  font-size: 0.8125rem;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+}
+
+.mesh-sub-note {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.mesh-stat-column {
+  display: grid;
+  gap: 0.625rem;
+}
+
+.mesh-summary {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ---------- Deployment tree ---------- */
+
+.tree-root,
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-children {
+  margin-left: 0.75rem;
+  padding-left: 0.625rem;
+  border-left: 1px solid var(--border);
+}
+
+.tree-node {
+  margin: 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 6px;
+  padding: 0.0625rem 0.125rem;
+}
+
+.tree-row.flagged {
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.tree-toggle {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.625rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tree-toggle:hover {
+  color: var(--accent);
+}
+
+.tree-toggle.spacer {
+  cursor: default;
+}
+
+.tree-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0.375rem;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.tree-label.as-button {
+  border: none;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.tree-label.as-button:hover {
+  background: var(--bg-surface-hover);
+  color: var(--accent);
+}
+
+.tree-badge {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.4px;
+  padding: 0.125rem 0.3125rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+}
+
+.tree-badge.tier-facility {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.tree-badge.tier-zone {
+  color: var(--text-secondary);
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-count,
+.tree-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
+.tree-status.status-online { color: var(--accent); }
+.tree-status.status-warning { color: var(--warning); }
+.tree-status.status-offline { color: var(--danger); }
+
+.tree-flag {
+  flex-shrink: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warning);
+  font-size: 0.5625rem;
+  font-weight: 700;
+}
+
+/* ---------- Validation findings ---------- */
+
+.mesh-issues {
+  border-top: 1px solid var(--border);
+  padding-top: 0.625rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mesh-issues h4 {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+}
+
+.mesh-issues ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.mesh-issues li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.issue-severity {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 0.125rem 0.3125rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+}
+
+.issue-severity.severity-critical {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.issue-severity.severity-warning {
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.0625rem;
+  min-width: 0;
+}
+
+.issue-kind {
+  font-size: 0.6875rem;
+  color: var(--text-primary);
+}
+
+.issue-path {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Ingest batch statistics ---------- */
+
+.mesh-batch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+
+.mesh-batch-table th {
+  text-align: right;
+  padding: 0.25rem 0.3125rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.mesh-batch-table th:first-child,
+.mesh-batch-table td:first-child {
+  text-align: left;
+}
+
+.mesh-batch-table td {
+  text-align: right;
+  padding: 0.25rem 0.3125rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.register-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.register-btn:disabled:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}

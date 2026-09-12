@@ -235,4 +235,14 @@ public class SensorProfileRepository : ISensorProfileRepository
             .Select(reading => reading.NumericValue ?? (reading.BooleanValue == true ? 1 : 0))
             .ToList();
     }
+
+    public List<SensorProfile> GetProfiles()
+    {
+        return _store.SensorProfiles.ToList();
+    }
+
+    public SensorProfile? GetById(Guid id)
+    {
+        return _store.SensorProfiles.FirstOrDefault(profile => profile.Id == id);
+    }
 }

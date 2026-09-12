@@ -19,6 +19,7 @@ import type {
 import AlertFeed from "../components/telemetry/AlertFeed";
 import ConfigurationProgress from "../components/telemetry/ConfigurationProgress";
 import FilterBar from "../components/telemetry/FilterBar";
+import MeshInsights from "../components/telemetry/MeshInsights";
 import SensorCard from "../components/telemetry/SensorCard";
 import RegisterSensorModal from "../components/telemetry/RegisterSensorModal";
 import SensorDetailModal from "../components/telemetry/SensorDetailModal";
@@ -135,6 +136,15 @@ function TelemetryPage() {
       handleSelect(selectedId);
     }
   }, [selectedId, handleSelect]);
+
+  // A gateway flush adds readings, so the overview tiles and the selected
+  // sensor's batch history both go stale.
+  const handleMeshIngested = useCallback(() => {
+    loadDashboard(filters);
+    if (selectedId) {
+      handleSelect(selectedId);
+    }
+  }, [loadDashboard, filters, selectedId, handleSelect]);
 
   const handleSensorRegistered = useCallback(() => {
     loadDashboard(filters);
@@ -284,6 +294,15 @@ function TelemetryPage() {
           onSelectSensor={handleSelect}
         />
       </div>
+
+      {/* Mesh-level view: the deployment hierarchy behind the flat sensor grid,
+          plus aggregate load and gateway ingest. */}
+      <MeshInsights
+        zone={filters.zones?.length === 1 ? filters.zones[0] : undefined}
+        sensorIds={sensors.map((sensor) => sensor.id)}
+        onSelectSensor={handleSelect}
+        onIngested={handleMeshIngested}
+      />
 
       {/* Investigate + troubleshoot, opened on demand over the overview. */}
       {selectedId && (

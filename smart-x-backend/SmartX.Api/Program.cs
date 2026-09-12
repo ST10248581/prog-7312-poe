@@ -11,6 +11,10 @@ builder.Services.AddControllers()
     {
         // Send enums to the frontend as names ("Warning") rather than numbers.
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+
+        // Gateways mark a lost sample as "NaN" so the positions in a batch stay
+        // aligned. JSON has no NaN literal, so accept the named form.
+        options.JsonSerializerOptions.NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals;
     });
 builder.Services.AddOpenApi();
 
@@ -23,10 +27,14 @@ builder.Services.AddScoped<ITelemetryRepository, TelemetryRepository>();
 builder.Services.AddScoped<IAlertRepository, AlertRepository>();
 builder.Services.AddScoped<IEngagementRepository, EngagementRepository>();
 
-builder.Services.AddScoped<ISensorService, SensorService>();
-builder.Services.AddScoped<ITelemetryService, TelemetryService>();
-builder.Services.AddScoped<IAlertService, AlertService>();
-builder.Services.AddScoped<IEngagementService, EngagementService>();
+// One central service backs every domain interface, so the controllers keep
+// depending on a narrow contract while the logic itself lives in one class.
+builder.Services.AddScoped<SmartXTelemetryEngine>();
+builder.Services.AddScoped<ISmartXTelemetryEngine>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
+builder.Services.AddScoped<ISensorService>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
+builder.Services.AddScoped<ITelemetryService>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
+builder.Services.AddScoped<IAlertService>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
+builder.Services.AddScoped<IEngagementService>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
 
 // In-memory data store and demo data seeding.
 builder.Services.AddSingleton<SeedOptions>();

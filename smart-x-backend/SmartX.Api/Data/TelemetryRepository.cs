@@ -211,4 +211,36 @@ public class TelemetryRepository : ITelemetryRepository
             Points = points
         };
     }
+
+    public TelemetryReading? GetLatest(Guid sensorProfileId, ReadingType readingType)
+    {
+        return _store.TelemetryReadings
+            .Where(reading => reading.SensorProfileId == sensorProfileId && reading.ReadingType == readingType)
+            .OrderByDescending(reading => reading.TimestampUtc)
+            .FirstOrDefault();
+    }
+
+    public int AppendReadings(IReadOnlyList<TelemetryReading> readings, IngestionBatch batch)
+    {
+        foreach (var reading in readings)
+        {
+            reading.Id = _store.NextTelemetryReadingId();
+            _store.TelemetryReadings.Add(reading);
+        }
+
+        _store.IngestionBatches.Add(batch);
+
+        // The sensor has just reported, so its liveness marker moves with it.
+        var sensor = _store.SensorProfiles.FirstOrDefault(profile => profile.Id == batch.SensorProfileId);
+        if (sensor is not null && readings.Count > 0)
+        {
+            var newest = readings.Max(reading => reading.TimestampUtc);
+            if (newest > sensor.LastSeenUtc)
+            {
+                sensor.LastSeenUtc = newest;
+            }
+        }
+
+        return readings.Count;
+    }
 }

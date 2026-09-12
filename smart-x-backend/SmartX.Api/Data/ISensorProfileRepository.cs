@@ -7,6 +7,12 @@ namespace SmartX.Api.Data;
 public interface ISensorProfileRepository
 {
     List<SensorListItem> GetAll(TelemetryQuery query);
+
+    /// <summary>Raw profiles, for logic that needs the entity rather than the list view.</summary>
+    List<SensorProfile> GetProfiles();
+
+    SensorProfile? GetById(Guid id);
+
     SensorDetail? GetDetail(Guid id);
     FilterOptions GetFilterOptions();
     SensorProfile? UpdatePayload(Guid id, UpdateSensorPayloadRequest request);

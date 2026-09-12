@@ -231,6 +231,125 @@ export interface CreateSensorRequest {
   category: SensorCategory;
 }
 
+/* ---------- Mesh-level types (deployment, load, ingestion) ---------- */
+
+export type DeploymentTier = "Facility" | "Zone" | "SubZone" | "Node";
+
+export type DeploymentIssueKind =
+  | "UnnamedNode"
+  | "TierOutOfOrder"
+  | "EmptyBranch"
+  | "DuplicateSibling"
+  | "OrphanedSensor"
+  | "DepthExceeded"
+  | "UnreachableNode"
+  | "CircularReference";
+
+/** Recursive: every tier holds a list of the tier below it. */
+export interface DeploymentNode {
+  name: string;
+  tier: DeploymentTier;
+  sensorProfileId: string | null;
+  status: SensorStatus | null;
+  isActive: boolean;
+  children: DeploymentNode[];
+}
+
+export interface DeploymentIssue {
+  path: string;
+  tier: DeploymentTier;
+  kind: DeploymentIssueKind;
+  severity: AlertSeverity;
+  message: string;
+}
+
+export interface DeploymentValidationReport {
+  root: DeploymentNode | null;
+  nodesVisited: number;
+  maxDepthReached: number;
+  sensorsPlaced: number;
+  validPaths: string[];
+  issues: DeploymentIssue[];
+  isValid: boolean;
+  generatedUtc: string;
+}
+
+export interface LoadReading {
+  sensorProfileId: string;
+  name: string;
+  nodeId: string;
+  value: number;
+  unit: string;
+  sampleCount: number;
+  lastReadingUtc: string | null;
+}
+
+export interface AggregateLoad {
+  scope: string;
+  totalValue: number;
+  averageValue: number;
+  unit: string;
+  meterCount: number;
+  contributors: LoadReading[];
+  generatedUtc: string;
+}
+
+export interface LoadComparison {
+  left: LoadReading;
+  right: LoadReading;
+  delta: number;
+  unit: string;
+  deltaPercent: number;
+  leftIsHeavier: boolean;
+  areEquivalent: boolean;
+  summary: string;
+}
+
+export interface BatchStatistic {
+  batchIndex: number;
+  sampleCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  anomalyCount: number;
+  minValue: number;
+  maxValue: number;
+  meanValue: number;
+}
+
+export interface TelemetryIngestResult {
+  sensorProfileId: string;
+  readingType: ReadingType;
+  unit: string;
+  /** CLR type the payload was wrapped in, e.g. "Double" or "Boolean". */
+  payloadType: string;
+  batchCount: number;
+  rawSampleCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  anomalyCount: number;
+  batchStatistics: BatchStatistic[];
+  processingMs: number;
+  ingestedUtc: string;
+}
+
+export type TelemetryPayloadKind = "Float" | "Double" | "Int" | "Bool";
+
+/**
+ * A lost sample is sent as the string "NaN" rather than omitted, so positions in
+ * a batch stay aligned. JSON has no NaN literal; the API accepts the named form.
+ */
+export type TelemetrySample = number | "NaN";
+
+export interface IngestTelemetryRequest {
+  readingType: ReadingType;
+  payloadKind?: TelemetryPayloadKind;
+  startUtc?: string;
+  intervalSeconds?: number;
+  sourceIpAddress?: string;
+  /** Jagged: one row per batch, rows may differ in length. */
+  batches: TelemetrySample[][];
+}
+
 /* ---------- Plumbing ---------- */
 
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -389,6 +508,56 @@ export function getAttachmentDownloadUrl(
   return `${API_BASE_URL}/sensors/${sensorId}/attachments/${attachmentId}/download`;
 }
 
+/* ---------- Mesh-level calls ---------- */
+
+/** Validated deployment tree. Pass a zone to validate one branch of the mesh. */
+export async function getDeployment(
+  zone?: string
+): Promise<DeploymentValidationReport> {
+  const query = buildQuery({ zone });
+  const response = await fetch(`${API_BASE_URL}/mesh/deployment${query}`);
+  return handleResponse<DeploymentValidationReport>(response);
+}
+
+export async function getAggregateLoad(
+  sensorIds: string[]
+): Promise<AggregateLoad> {
+  const query = buildQuery({ sensorIds });
+  const response = await fetch(`${API_BASE_URL}/mesh/load${query}`);
+  return handleResponse<AggregateLoad>(response);
+}
+
+export async function getZoneLoad(zone: string): Promise<AggregateLoad> {
+  const response = await fetch(
+    `${API_BASE_URL}/mesh/load/zone/${encodeURIComponent(zone)}`
+  );
+  return handleResponse<AggregateLoad>(response);
+}
+
+export async function compareLoad(
+  left: string,
+  right: string
+): Promise<LoadComparison> {
+  const query = buildQuery({ left, right });
+  const response = await fetch(`${API_BASE_URL}/mesh/load/compare${query}`);
+  return handleResponse<LoadComparison>(response);
+}
+
+export async function ingestBatches(
+  sensorId: string,
+  request: IngestTelemetryRequest
+): Promise<TelemetryIngestResult> {
+  const response = await fetch(
+    `${API_BASE_URL}/mesh/sensors/${sensorId}/ingest`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+  return handleResponse<TelemetryIngestResult>(response);
+}
+
 export default {
   testConnection,
   getSummary,
@@ -403,4 +572,9 @@ export default {
   updateSensorPayload,
   uploadAttachment,
   getAttachmentDownloadUrl,
+  getDeployment,
+  getAggregateLoad,
+  getZoneLoad,
+  compareLoad,
+  ingestBatches,
 };
