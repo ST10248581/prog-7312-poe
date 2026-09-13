@@ -1,3 +1,19 @@
+// =============================================================================
+// CODE ATTRIBUTION — Generics (Technical and Language Requirement 1)
+//
+// The generic wrapper class, its `where T : struct` constraint and the
+// allocation-free payload access in this file were written with reference to:
+//
+//   [1] Microsoft Learn, "Generic types and methods - C#".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics
+//   [2] Microsoft Learn, "Constraints on type parameters - C#".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters
+//   [3] Microsoft Learn, "Boxing and Unboxing - C#".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+//   [4] Microsoft Learn, "Unsafe.As Method (System.Runtime.CompilerServices)".
+//       https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.as
+// =============================================================================
+
 using System.Runtime.CompilerServices;
 
 namespace SmartX.Api.Models.Telemetry;
@@ -49,6 +65,9 @@ public interface ITelemetryPacket
 /// </para>
 /// </summary>
 /// <typeparam name="T">The value type carried by the packet (float, double, int, bool, ...).</typeparam>
+// Generic class declaration and the `where T : struct` (non-nullable value type)
+// constraint follow the patterns documented in [1] and [2]; the reason for keeping
+// the payload in a `T` field rather than an `object` field is set out in [3].
 public sealed class TelemetryPacket<T> : ITelemetryPacket where T : struct
 {
     public TelemetryPacket(
@@ -92,6 +111,10 @@ public sealed class TelemetryPacket<T> : ITelemetryPacket where T : struct
     /// on every single sample.
     /// </para>
     /// </summary>
+    // The `typeof(T) == typeof(X)` test followed by Unsafe.As<TFrom,TTo>(ref TFrom)
+    // is the reinterpret-cast pattern documented in [4] (conceptually C++'s
+    // reinterpret_cast); it replaces a cast through `object`, which would box on
+    // every sample as described in [3].
     public bool TryGetNumeric(out double numeric)
     {
         var value = Value;

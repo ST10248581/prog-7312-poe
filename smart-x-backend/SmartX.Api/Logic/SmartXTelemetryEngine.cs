@@ -1,3 +1,40 @@
+// =============================================================================
+// CODE ATTRIBUTION — Technical and Language Requirements
+//
+// This class is where the four required advanced C# concepts do their work. The
+// language constructs used for each were written with reference to the sources
+// below; the individual sections are marked with the matching numbers, and the
+// full list is repeated in README.md.
+//
+//   Generics
+//   [1] Microsoft Learn, "Generic types and methods - C#".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics
+//   [3] Microsoft Learn, "Boxing and Unboxing - C#".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+//
+//   Operator overloading
+//   [5] Microsoft Learn, "Operator overloading - ... - C# reference".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading
+//   [6] Microsoft Learn, "Operator Overloads - Framework Design Guidelines".
+//       https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads
+//
+//   Advanced arrays and lists
+//   [9] Microsoft Learn, "The array reference type - C# reference".
+//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays
+//  [10] Microsoft Learn, "Array.GetLength(Int32) Method".
+//       https://learn.microsoft.com/en-us/dotnet/api/system.array.getlength
+//  [11] Microsoft Learn, "List<T> Constructors" (the List<T>(Int32) capacity
+//       overload).
+//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.-ctor
+//
+//   Recursion
+//  [12] Microsoft Learn, "Iterate Through All Nodes of TreeView Control -
+//       Windows Forms".
+//       https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control
+//  [13] Microsoft Learn, "ReferenceEqualityComparer Class".
+//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer
+// =============================================================================
+
 using System.Diagnostics;
 using SmartX.Api.Data;
 using SmartX.Api.Data.Seeding;
@@ -181,6 +218,10 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
 
     // =====================================================================
     // Batch ingestion - generics + jagged and multi-dimensional arrays
+    // Code attribution: jagged double[][] and rectangular double[,] forms and
+    // their `[row, column]` indexing follow [9]; pre-sizing the List<T> with the
+    // capacity constructor to avoid repeated internal re-allocation follows [11];
+    // the generic packets built per sample follow [1] and [3].
     // =====================================================================
 
     /// <summary>
@@ -383,6 +424,8 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     /// <summary>Lifts the rectangular working matrix into a serialisable collection.</summary>
     private static List<BatchStatistic> ProjectStatistics(double[,] statistics)
     {
+        // GetLength(0) returns the number of elements in the first dimension (the
+        // row count) of a multi-dimensional array - see [10] and [9].
         var rowCount = statistics.GetLength(0);
         var projected = new List<BatchStatistic>(rowCount);
 
@@ -408,6 +451,10 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
 
     // =====================================================================
     // Load arithmetic - operator overloading
+    // Code attribution: the call sites below consume the operators declared on
+    // SensorLoad; the operators themselves follow [5], and expressing zone
+    // aggregation as `+`/`-` on a numeric-style value type rather than as named
+    // helper methods follows the guidance in [6].
     // =====================================================================
 
     /// <summary>
@@ -536,6 +583,11 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
 
     // =====================================================================
     // Deployment validation - recursion
+    // Code attribution: the walk follows the recursive approach in [12] - process
+    // the node, then call the same method for each child - and adds the two base
+    // cases [12] warns are needed on a large or malformed tree (a depth guard and
+    // an ancestor set). The ancestor set uses ReferenceEqualityComparer.Instance
+    // so nodes are tracked by identity rather than by value; see [13].
     // =====================================================================
 
     public DeploymentValidationReport ValidateDeployment(string? zone = null)
@@ -577,6 +629,8 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     /// The recursive step: validate this node, then hand each child the tier it is
     /// required to occupy and let the same method validate it.
     /// </summary>
+    // Code attribution: recursive method structure adapted from the PrintRecursive
+    // example in [12] (process the node, then foreach child call the same method).
     private static void ValidateNode(
         DeploymentNode node,
         DeploymentTier expectedTier,

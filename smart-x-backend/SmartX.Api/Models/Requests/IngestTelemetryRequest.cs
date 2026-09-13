@@ -1,3 +1,16 @@
+// =============================================================================
+// CODE ATTRIBUTION — Advanced Arrays and Lists (Technical and Language
+// Requirement 3)
+//
+// The `double[][]` jagged array declaration used to carry ragged batches was
+// written with reference to:
+//
+//   [9] Microsoft Learn, "The array reference type - C# reference"
+//       (Jagged arrays: "an array whose elements are arrays, possibly of
+//       different sizes"; and Multidimensional arrays).
+//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays
+// =============================================================================
+
 using SmartX.Api.Models.Telemetry;
 
 namespace SmartX.Api.Models.Requests;

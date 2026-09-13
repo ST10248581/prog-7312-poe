@@ -1,3 +1,17 @@
+// =============================================================================
+// CODE ATTRIBUTION — Recursion (Technical and Language Requirement 4)
+//
+// The self-referencing node shape (a node holding a collection of nodes), which
+// is what makes the validation walk in SmartXTelemetryEngine recursive, follows:
+//
+//  [12] Microsoft Learn, "Iterate Through All Nodes of TreeView Control -
+//       Windows Forms" (Recursive approach: "a method that processes a tree
+//       node, and then calls the same method for each child node" — including
+//       its warning that a big tree may cause a stack overflow, which is why
+//       the engine carries a depth guard).
+//       https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control
+// =============================================================================
+
 namespace SmartX.Api.Models.Telemetry;
 
 /// <summary>
