@@ -1,0 +1,551 @@
+/* ============================================================
+   Real-Time Command Stream and History
+   Layout follows watch -> filter -> override -> audit.
+
+   Shared widgets (stat tiles, filter chips, .panel-head, .data-table)
+   come from TelemetryPage.css; only command-specific rules live here.
+   Breakpoints live in index.css with every other breakpoint.
+   ============================================================ */
+
+.commands-page {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ---------- Layout-stage notice ---------- */
+
+.page-notice {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border: 1px dashed var(--border-light);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.page-notice strong { color: var(--text-primary); }
+
+/* ---------- Status colours ----------
+   One scale reused by chips, stream rows, pills and the pending list, so a
+   status reads the same wherever it appears. */
+
+.cmd-status-queued { --cmd-tone: var(--text-secondary); }
+.cmd-status-sent { --cmd-tone: #38bdf8; }
+.cmd-status-acknowledged { --cmd-tone: var(--accent); }
+.cmd-status-failed { --cmd-tone: var(--danger); }
+.cmd-status-expired { --cmd-tone: var(--warning); }
+
+.filter-chip.cmd-status-queued .filter-chip-dot,
+.filter-chip.cmd-status-sent .filter-chip-dot,
+.filter-chip.cmd-status-acknowledged .filter-chip-dot,
+.filter-chip.cmd-status-failed .filter-chip-dot,
+.filter-chip.cmd-status-expired .filter-chip-dot {
+  background: var(--cmd-tone);
+}
+
+/* ---------- Filter controls not on the telemetry bar ---------- */
+
+.filter-select,
+.filter-search {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+}
+
+.filter-select:focus,
+.filter-search:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
+.filter-search { min-width: 190px; }
+.filter-search::placeholder { color: var(--text-muted); }
+
+.filter-group-search { flex: 1 1 200px; min-width: 0; }
+.filter-group-search .filter-search { flex: 1; min-width: 0; }
+
+.filter-segment {
+  display: inline-flex;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.filter-segment-btn {
+  padding: 0.3rem 0.6rem;
+  border: none;
+  border-right: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.filter-segment-btn:last-child { border-right: none; }
+.filter-segment-btn:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+
+.filter-segment-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---------- Panels ---------- */
+
+.throughput-panel,
+.command-stream-panel,
+.override-console,
+.command-history {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+/* ---------- Throughput ---------- */
+
+.throughput-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.throughput-svg {
+  width: 100%;
+  height: 64px;
+}
+
+.throughput-bar { fill: var(--accent); opacity: 0.55; }
+.throughput-bar.peak { opacity: 1; }
+
+.throughput-legend {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.throughput-legend strong {
+  font-family: var(--mono);
+  color: var(--text-primary);
+}
+
+.throughput-window { margin-left: auto; }
+
+/* ---------- Stream + override grid ---------- */
+
+.commands-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 1rem;
+  align-items: start;
+}
+
+/* ---------- Command stream ---------- */
+
+.stream-state {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.stream-state.live {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.command-stream {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+/* A fixed column rhythm keeps the tail scannable as rows stream in; the
+   command itself takes the slack. */
+.command-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 72px 90px minmax(0, 1fr) 80px 96px 64px 60px;
+  align-items: center;
+  gap: 0.625rem;
+  text-align: left;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--cmd-tone, var(--text-muted));
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-family: var(--sans);
+  color: var(--text-primary);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.command-row:hover { background: var(--bg-surface-hover); }
+
+.command-row.selected {
+  border-color: var(--accent-border);
+  background: var(--bg-surface-hover);
+}
+
+.command-row-time,
+.command-row-node {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.command-row-time { color: var(--text-muted); }
+.command-row-node { font-weight: 600; }
+
+.command-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.command-row-type {
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.command-row-params {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-origin {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  justify-self: start;
+}
+
+/* Manual traffic is the exception in an automated mesh, so it is the one
+   origin that carries colour. */
+.command-origin.origin-manual {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.command-status {
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--cmd-tone, var(--text-secondary));
+  justify-self: start;
+  white-space: nowrap;
+}
+
+.command-row-latency,
+.command-row-age {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.command-stream-foot {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ---------- Override console ---------- */
+
+.override-console {
+  position: sticky;
+  top: calc(var(--nav-height) + 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.override-intro {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.override-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.override-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.override-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.override-input {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  width: 100%;
+}
+
+.override-input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  background: var(--bg-surface-hover);
+}
+
+.override-input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.override-hint {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
+.override-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.override-check input {
+  margin-top: 0.2rem;
+  accent-color: var(--accent);
+}
+
+.override-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.override-summary-label {
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.override-summary-body {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: none;
+  padding: 0;
+  word-break: break-word;
+}
+
+.override-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.override-btn {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.override-btn-send {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.override-btn-send:hover:not(:disabled) { background: rgba(0, 212, 170, 0.22); }
+
+.override-btn-reset {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.override-btn-reset:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.override-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.override-pending-note {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.override-pending {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.override-pending-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.override-pending-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.override-pending-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+}
+
+.override-pending-node {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.override-pending-type {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+.override-pending-age {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
+/* ---------- History ---------- */
+
+/* The table keeps its column widths and scrolls sideways rather than
+   compressing nine columns into a phone. */
+.command-history-scroll {
+  overflow-x: auto;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.command-history-scroll .data-table { min-width: 880px; }
+
+.command-history-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.command-history-range {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.command-history-pager {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pager-btn {
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.pager-btn:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.pager-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.pager-position {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}

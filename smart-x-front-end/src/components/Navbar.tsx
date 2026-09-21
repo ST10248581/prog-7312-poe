@@ -10,7 +10,7 @@ const navItems = [
   {
     label: "Real-Time Command Stream and History",
     path: "/commands",
-    disabled: true,
+    disabled: false,
   },
   {
     label: "Network Topology and Mesh Routing",

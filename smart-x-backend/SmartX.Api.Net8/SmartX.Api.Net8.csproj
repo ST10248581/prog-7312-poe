@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Throwaway wrapper: builds the SmartX.Api sources against the .NET 8 SDK
+       so the API can be smoke-tested on a machine without the .NET 10 SDK.
+       The real project is SmartX.Api (net10.0); nothing here is part of it. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SmartX.Api</RootNamespace>
+    <AssemblyName>SmartX.Api.Net8</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Every source file from the real project except its Program.cs, which
+         calls AddOpenApi()/MapOpenApi() (.NET 9+ only). This project supplies
+         its own equivalent entry point. -->
+    <Compile Include="Program.cs" />
+    <Compile Include="..\SmartX.Api\**\*.cs"
+             Exclude="..\SmartX.Api\Program.cs;..\SmartX.Api\bin\**\*.cs;..\SmartX.Api\obj\**\*.cs" />
+  </ItemGroup>
+
+</Project>
