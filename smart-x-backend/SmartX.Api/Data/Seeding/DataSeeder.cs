@@ -12,6 +12,7 @@ public class DataSeeder : IDataSeeder
     private readonly ISensorAttachmentSeeder _sensorAttachmentSeeder;
     private readonly IIngestionBatchSeeder _ingestionBatchSeeder;
     private readonly IEngagementStateSeeder _engagementStateSeeder;
+    private readonly ICommandSeeder _commandSeeder;
     private readonly ISmartXDataStore _store;
     private readonly ILogger<DataSeeder> _logger;
 
@@ -23,6 +24,7 @@ public class DataSeeder : IDataSeeder
         ISensorAttachmentSeeder sensorAttachmentSeeder,
         IIngestionBatchSeeder ingestionBatchSeeder,
         IEngagementStateSeeder engagementStateSeeder,
+        ICommandSeeder commandSeeder,
         ISmartXDataStore store,
         ILogger<DataSeeder> logger)
     {
@@ -33,6 +35,7 @@ public class DataSeeder : IDataSeeder
         _sensorAttachmentSeeder = sensorAttachmentSeeder;
         _ingestionBatchSeeder = ingestionBatchSeeder;
         _engagementStateSeeder = engagementStateSeeder;
+        _commandSeeder = commandSeeder;
         _store = store;
         _logger = logger;
     }
@@ -40,7 +43,8 @@ public class DataSeeder : IDataSeeder
     public void SeedAll()
     {
         // Order matters: thresholds need sensors, readings need thresholds,
-        // alerts need readings, and engagement totals need everything else.
+        // alerts need readings, engagement totals need everything else, and the
+        // command log needs the sensor profiles it dispatches to.
         _sensorProfileSeeder.Seed();
         _sensorThresholdSeeder.Seed();
         _telemetryReadingSeeder.Seed();
@@ -48,15 +52,17 @@ public class DataSeeder : IDataSeeder
         _sensorAttachmentSeeder.Seed();
         _ingestionBatchSeeder.Seed();
         _engagementStateSeeder.Seed();
+        _commandSeeder.Seed();
 
         _logger.LogInformation(
-            "Seeded Smart-X demo data: {Sensors} sensors, {Thresholds} thresholds, {Readings} readings, {Alerts} alerts, {Attachments} attachments, {Batches} batches, {Engagement} engagement records.",
+            "Seeded Smart-X demo data: {Sensors} sensors, {Thresholds} thresholds, {Readings} readings, {Alerts} alerts, {Attachments} attachments, {Batches} batches, {Engagement} engagement records, {Commands} commands.",
             _store.SensorProfiles.Count,
             _store.SensorThresholds.Count,
             _store.TelemetryReadings.Count,
             _store.Alerts.Count,
             _store.SensorAttachments.Count,
             _store.IngestionBatches.Count,
-            _store.EngagementStates.Count);
+            _store.EngagementStates.Count,
+            _store.DeviceCommands.Count);
     }
 }

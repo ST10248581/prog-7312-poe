@@ -61,3 +61,36 @@ public enum AlertStatus
     Acknowledged,
     Resolved
 }
+
+public enum CommandType
+{
+    SetThreshold,
+    Recalibrate,
+    ToggleActuator,
+    RestartNode,
+    FirmwarePush,
+    RequestSample
+}
+
+public enum CommandOrigin
+{
+    Automation,
+    Manual,
+    Schedule
+}
+
+public enum CommandStatus
+{
+    Queued,
+    Sent,
+    Acknowledged,
+    Failed,
+    Expired
+}
+
+public enum CommandPriority
+{
+    Normal,
+    High,
+    Immediate
+}

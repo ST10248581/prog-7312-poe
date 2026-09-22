@@ -13,8 +13,11 @@ public class SmartXDataStore : ISmartXDataStore
     public List<SensorAttachment> SensorAttachments { get; } = new();
     public List<IngestionBatch> IngestionBatches { get; } = new();
     public List<EngagementState> EngagementStates { get; } = new();
+    public List<DeviceCommand> DeviceCommands { get; } = new();
 
     public Dictionary<Guid, byte[]> AttachmentFiles { get; } = new();
+
+    public object CommandsSyncRoot { get; } = new();
 
     public long NextTelemetryReadingId()
     {

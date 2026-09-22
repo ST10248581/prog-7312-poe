@@ -26,6 +26,11 @@ builder.Services.AddScoped<ISensorProfileRepository, SensorProfileRepository>();
 builder.Services.AddScoped<ITelemetryRepository, TelemetryRepository>();
 builder.Services.AddScoped<IAlertRepository, AlertRepository>();
 builder.Services.AddScoped<IEngagementRepository, EngagementRepository>();
+builder.Services.AddScoped<ICommandRepository, CommandRepository>();
+
+// The command stream is its own domain rather than part of the telemetry engine:
+// it has no overlap with the ingest pipeline beyond the sensor profiles it targets.
+builder.Services.AddScoped<ICommandService, CommandService>();
 
 // One central service backs every domain interface, so the controllers keep
 // depending on a narrow contract while the logic itself lives in one class.
@@ -46,7 +51,13 @@ builder.Services.AddSingleton<IAlertSeeder, AlertSeeder>();
 builder.Services.AddSingleton<ISensorAttachmentSeeder, SensorAttachmentSeeder>();
 builder.Services.AddSingleton<IIngestionBatchSeeder, IngestionBatchSeeder>();
 builder.Services.AddSingleton<IEngagementStateSeeder, EngagementStateSeeder>();
+builder.Services.AddSingleton<ICommandSeeder, CommandSeeder>();
 builder.Services.AddSingleton<IDataSeeder, DataSeeder>();
+
+// Keeps the command stream moving: issues automated traffic and settles
+// in-flight commands, so the dashboard shows live dispatch rather than a
+// frozen log.
+builder.Services.AddHostedService<CommandDispatchSimulator>();
 
 builder.Services.AddCors(options =>
 {

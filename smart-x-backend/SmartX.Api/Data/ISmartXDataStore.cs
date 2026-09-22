@@ -15,8 +15,16 @@ public interface ISmartXDataStore
     List<SensorAttachment> SensorAttachments { get; }
     List<IngestionBatch> IngestionBatches { get; }
     List<EngagementState> EngagementStates { get; }
+    List<DeviceCommand> DeviceCommands { get; }
 
     Dictionary<Guid, byte[]> AttachmentFiles { get; }
+
+    /// <summary>
+    /// Guards <see cref="DeviceCommands"/>. Unlike the other tables, the command
+    /// log is written by the dispatch simulator on a background timer while
+    /// requests are reading it, so every touch of that list takes this lock.
+    /// </summary>
+    object CommandsSyncRoot { get; }
 
     long NextTelemetryReadingId();
 }

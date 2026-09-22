@@ -7,10 +7,12 @@ import {
   TIME_WINDOWS,
 } from "./types";
 import type { CommandFilters } from "./types";
+import type { CommandFilterOptions } from "../../services/apiService";
 
 interface CommandFilterBarProps {
+  /** Straight from `/api/commands/filter-options`; null until it arrives. */
+  options: CommandFilterOptions | null;
   filters: CommandFilters;
-  zones: string[];
   resultCount: number;
   totalCount: number;
   onChange: (filters: CommandFilters) => void;
@@ -20,17 +22,23 @@ interface CommandFilterBarProps {
  * One filter state for the whole page — the stream, the throughput strip and
  * the history table all describe the same slice.
  *
- * Every control only edits `filters` and hands it back up. The page owns the
- * request, so when the API lands the change is a fetch in the page, not a
- * change here: this component never narrows a list itself.
+ * Every control only edits `filters` and hands it back up; the page owns the
+ * request and refetches on every change, so this component never narrows a
+ * list itself. The option lists come from the API, with the local constants
+ * standing in only until that first response lands.
  */
 function CommandFilterBar({
+  options,
   filters,
-  zones,
   resultCount,
   totalCount,
   onChange,
 }: CommandFilterBarProps) {
+  const statuses = options?.statuses ?? COMMAND_STATUSES;
+  const origins = options?.origins ?? COMMAND_ORIGINS;
+  const commandTypes = options?.commandTypes ?? COMMAND_TYPES;
+  const zones = options?.zones ?? [];
+
   type ChipKey = "statuses" | "origins" | "commandTypes";
 
   const toggle = <K extends ChipKey>(key: K, value: CommandFilters[K][number]) => {
@@ -59,7 +67,7 @@ function CommandFilterBar({
       <div className="filter-group">
         <span className="filter-group-label">Status</span>
         <div className="filter-chips">
-          {COMMAND_STATUSES.map((status) => (
+          {statuses.map((status) => (
             <button
               key={status}
               type="button"
@@ -78,7 +86,7 @@ function CommandFilterBar({
       <div className="filter-group">
         <span className="filter-group-label">Origin</span>
         <div className="filter-chips">
-          {COMMAND_ORIGINS.map((origin) => (
+          {origins.map((origin) => (
             <button
               key={origin}
               type="button"
@@ -94,7 +102,7 @@ function CommandFilterBar({
       <div className="filter-group">
         <span className="filter-group-label">Command</span>
         <div className="filter-chips">
-          {COMMAND_TYPES.map((type) => (
+          {commandTypes.map((type) => (
             <button
               key={type}
               type="button"

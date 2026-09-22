@@ -350,11 +350,107 @@ export interface IngestTelemetryRequest {
   batches: TelemetrySample[][];
 }
 
+/* ---------- Command stream types ---------- */
+
+export type CommandStatus = "Queued" | "Sent" | "Acknowledged" | "Failed" | "Expired";
+
+export type CommandOrigin = "Automation" | "Manual" | "Schedule";
+
+export type CommandPriority = "Normal" | "High" | "Immediate";
+
+export type CommandType =
+  | "SetThreshold"
+  | "Recalibrate"
+  | "ToggleActuator"
+  | "RestartNode"
+  | "FirmwarePush"
+  | "RequestSample";
+
+export interface DeviceCommand {
+  id: string;
+  sensorProfileId: string;
+  nodeId: string;
+  sensorName: string;
+  zone: string;
+  commandType: CommandType;
+  /** Rendered as-is in the stream, e.g. `temp.max=28.5`. */
+  parameters: string;
+  origin: CommandOrigin;
+  priority: CommandPriority;
+  status: CommandStatus;
+  issuedUtc: string;
+  dispatchedUtc: string | null;
+  acknowledgedUtc: string | null;
+  /** Dispatch to acknowledgement; null while still in flight. */
+  roundTripMs: number | null;
+  issuedBy: string;
+  retries: number;
+  isDryRun: boolean;
+}
+
+export interface CommandSummary {
+  windowMinutes: number;
+  dispatchRate: number;
+  inFlightCount: number;
+  queuedCount: number;
+  retryingCount: number;
+  acknowledgedRate: number;
+  failedCount: number;
+  expiredCount: number;
+  manualOverrideCount: number;
+  operatorCount: number;
+  medianRoundTripMs: number;
+  totalCount: number;
+  /** Commands per minute across the window, oldest first. */
+  throughput: number[];
+  generatedUtc: string;
+}
+
+export interface CommandFilterOptions {
+  statuses: CommandStatus[];
+  origins: CommandOrigin[];
+  commandTypes: CommandType[];
+  priorities: CommandPriority[];
+  zones: string[];
+  /** Node ids that can be targeted by a manual override. */
+  nodes: string[];
+}
+
+/**
+ * The whole command filter state, sent to the API as one query. Empty arrays
+ * mean "no constraint" rather than "match nothing".
+ */
+export interface CommandQuery {
+  statuses?: CommandStatus[];
+  origins?: CommandOrigin[];
+  commandTypes?: CommandType[];
+  zone?: string;
+  search?: string;
+  manualOnly?: boolean;
+  windowMinutes?: number;
+}
+
+export interface DispatchCommandRequest {
+  nodeId: string;
+  commandType: CommandType;
+  parameters: string;
+  priority: CommandPriority;
+  dryRun: boolean;
+  issuedBy?: string;
+}
+
 /* ---------- Plumbing ---------- */
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`);
+    // A rejected write explains itself in the body (`{ "error": "…" }`).
+    // Surfacing that beats showing the operator a bare 400.
+    const detail = await response
+      .json()
+      .then((body: { error?: string }) => body?.error)
+      .catch(() => undefined);
+
+    throw new Error(detail ?? `API error: ${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<T>;
 }
@@ -558,6 +654,66 @@ export async function ingestBatches(
   return handleResponse<TelemetryIngestResult>(response);
 }
 
+/* ---------- Command stream calls ---------- */
+
+/** Every command endpoint takes the same filter, so the query is built once. */
+function buildCommandQuery(query: CommandQuery, extra: Record<string, unknown> = {}): string {
+  return buildQuery({
+    statuses: query.statuses,
+    origins: query.origins,
+    commandTypes: query.commandTypes,
+    zone: query.zone,
+    search: query.search,
+    manualOnly: query.manualOnly,
+    windowMinutes: query.windowMinutes,
+    ...extra,
+  });
+}
+
+/** Audit trail: the filtered history, newest first, one page at a time. */
+export async function getCommands(
+  query: CommandQuery = {},
+  page = 1,
+  pageSize = 25
+): Promise<PagedResult<DeviceCommand>> {
+  const search = buildCommandQuery(query, { page, pageSize });
+  const response = await fetch(`${API_BASE_URL}/commands${search}`);
+  return handleResponse<PagedResult<DeviceCommand>>(response);
+}
+
+/** Live tail: the newest commands in the window, capped by the API. */
+export async function getCommandStream(
+  query: CommandQuery = {},
+  take = 40
+): Promise<DeviceCommand[]> {
+  const search = buildCommandQuery(query, { take });
+  const response = await fetch(`${API_BASE_URL}/commands/stream${search}`);
+  return handleResponse<DeviceCommand[]>(response);
+}
+
+export async function getCommandSummary(query: CommandQuery = {}): Promise<CommandSummary> {
+  const search = buildCommandQuery(query);
+  const response = await fetch(`${API_BASE_URL}/commands/summary${search}`);
+  return handleResponse<CommandSummary>(response);
+}
+
+export async function getCommandFilterOptions(): Promise<CommandFilterOptions> {
+  const response = await fetch(`${API_BASE_URL}/commands/filter-options`);
+  return handleResponse<CommandFilterOptions>(response);
+}
+
+/** Queue a manual override. Rejections come back as an error message. */
+export async function dispatchCommand(
+  request: DispatchCommandRequest
+): Promise<DeviceCommand> {
+  const response = await fetch(`${API_BASE_URL}/commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<DeviceCommand>(response);
+}
+
 export default {
   testConnection,
   getSummary,
@@ -577,4 +733,9 @@ export default {
   getZoneLoad,
   compareLoad,
   ingestBatches,
+  getCommands,
+  getCommandStream,
+  getCommandSummary,
+  getCommandFilterOptions,
+  dispatchCommand,
 };

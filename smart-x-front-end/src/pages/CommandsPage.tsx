@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import CommandFilterBar from "../components/commands/CommandFilterBar";
 import CommandHistoryTable from "../components/commands/CommandHistoryTable";
 import CommandStream from "../components/commands/CommandStream";
@@ -6,14 +6,26 @@ import OverrideConsole from "../components/commands/OverrideConsole";
 import ThroughputStrip from "../components/commands/ThroughputStrip";
 import StatTile from "../components/telemetry/StatTile";
 import {
-  PLACEHOLDER_COMMANDS,
-  PLACEHOLDER_NODES,
-  PLACEHOLDER_THROUGHPUT,
-  PLACEHOLDER_ZONES,
-} from "../components/commands/placeholderData";
-import { EMPTY_FILTERS, TIME_WINDOWS } from "../components/commands/types";
+  EMPTY_FILTERS,
+  TIME_WINDOWS,
+  toCommandQuery,
+} from "../components/commands/types";
 import type { CommandFilters, CommandRecord } from "../components/commands/types";
-import { formatTime } from "../utils/format";
+import {
+  dispatchCommand,
+  getCommandFilterOptions,
+  getCommandStream,
+  getCommandSummary,
+  getCommands,
+} from "../services/apiService";
+import type {
+  CommandFilterOptions,
+  CommandSummary,
+  DeviceCommand,
+  DispatchCommandRequest,
+  PagedResult,
+} from "../services/apiService";
+import { formatNumber, formatTime } from "../utils/format";
 // Shared widget styles — stat tiles, filter chips, panels and .data-table all
 // live in the telemetry sheet. Imported explicitly so this route does not rely
 // on the telemetry route having been loaded first.
@@ -21,18 +33,22 @@ import "./TelemetryPage.css";
 import "./CommandsPage.css";
 
 const PAGE_SIZE = 25;
+const STREAM_SIZE = 40;
+
+/** The backend issues and settles commands on a 2s tick, so poll to match. */
+const REFRESH_MS = 3_000;
 
 /**
- * Real-Time Command Stream and History — layout pass.
+ * Real-Time Command Stream and History.
  *
- * Structure mirrors the telemetry route: overview -> filter -> stream and act
- * -> audit. Filtering, paging and dispatch are all server-side concerns; this
- * page only holds the filter state and renders what it is given, so wiring the
- * API means replacing the placeholder constants with fetches, not reshaping
- * the components.
+ * Structure mirrors the telemetry route: overview → filter → stream and act →
+ * audit. Filtering, paging and dispatch are all server-side: this page holds
+ * the filter state, sends it as one query to `/api/commands/*` and renders
+ * exactly what comes back. Nothing is narrowed, sorted or paged in the browser.
  *
- * Not yet implemented: /api/commands (list + page), /api/commands/stream
- * (live tail), POST /api/commands (override dispatch).
+ * The stream is genuinely live rather than a static snapshot — the API's
+ * dispatch simulator issues automated traffic and advances in-flight commands,
+ * so a page left open sees rows arrive and pending ones settle.
  */
 function CommandsPage() {
   const [filters, setFilters] = useState<CommandFilters>(EMPTY_FILTERS);
@@ -41,16 +57,65 @@ function CommandsPage() {
   const [live, setLive] = useState(true);
   const [page, setPage] = useState(1);
 
-  // Placeholder stand-ins for the API response. The real page refetches on
-  // every filter change; nothing is narrowed in the browser.
-  const commands = PLACEHOLDER_COMMANDS;
-  const totalCount = 1284;
-  const pending = commands.filter(
-    (command) => command.status === "Queued" || command.status === "Sent",
+  const [summary, setSummary] = useState<CommandSummary | null>(null);
+  const [stream, setStream] = useState<DeviceCommand[]>([]);
+  const [history, setHistory] = useState<PagedResult<DeviceCommand> | null>(null);
+  const [options, setOptions] = useState<CommandFilterOptions | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  // `loading` covers the first paint only; live refreshes swap data in place
+  // rather than flashing the panels back to a loading state.
+  const loadCommands = useCallback(
+    async (activeFilters: CommandFilters, activePage: number) => {
+      const query = toCommandQuery(activeFilters);
+
+      try {
+        const [summaryData, streamData, historyData] = await Promise.all([
+          getCommandSummary(query),
+          getCommandStream(query, STREAM_SIZE),
+          getCommands(query, activePage, PAGE_SIZE),
+        ]);
+
+        setSummary(summaryData);
+        setStream(streamData);
+        setHistory(historyData);
+        setLastRefresh(new Date());
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to reach the Smart-X API");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
   );
 
-  const windowLabel =
-    TIME_WINDOWS.find((window) => window.minutes === filters.windowMinutes)?.label ?? "1h";
+  // Static lookups, fetched once: filter values and the override target list.
+  useEffect(() => {
+    getCommandFilterOptions().then(setOptions).catch(() => undefined);
+  }, []);
+
+  // Refetch whenever the filters or the page change. The rule below sees
+  // setState inside loadCommands and assumes it runs synchronously; every call
+  // sits after an await, and fetching from the API is exactly the
+  // external-system case the rule carves out.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    loadCommands(filters, page);
+  }, [filters, page, loadCommands]);
+
+  // Live polling: the real-time feedback loop.
+  useEffect(() => {
+    if (!live) {
+      return;
+    }
+
+    const timer = window.setInterval(() => loadCommands(filters, page), REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [live, filters, page, loadCommands]);
 
   const handleFilterChange = (next: CommandFilters) => {
     setFilters(next);
@@ -64,6 +129,35 @@ function CommandsPage() {
     setSelectedId(command.id);
     setTargetNode(command.nodeId);
   };
+
+  // A queued override belongs in the stream immediately, not on the next tick.
+  const handleDispatch = useCallback(
+    async (request: DispatchCommandRequest) => {
+      const command = await dispatchCommand(request);
+      await loadCommands(filters, page);
+      return command;
+    },
+    [loadCommands, filters, page],
+  );
+
+  const windowLabel =
+    TIME_WINDOWS.find((window) => window.minutes === filters.windowMinutes)?.label ?? "1h";
+
+  // Everything still awaiting an acknowledgement, taken from the stream the API
+  // just returned rather than tracked separately.
+  const pending = stream.filter(
+    (command) => command.status === "Queued" || command.status === "Sent",
+  );
+
+  const totalCount = history?.totalCount ?? 0;
+
+  const failedTone = summary && summary.failedCount > 0 ? "danger" : "default";
+  const ackTone =
+    !summary || summary.acknowledgedRate >= 95
+      ? "accent"
+      : summary.acknowledgedRate >= 85
+        ? "warning"
+        : "danger";
 
   return (
     <div className="commands-page">
@@ -86,59 +180,68 @@ function CommandsPage() {
             <span className="live-dot" />
             {live ? "Live" : "Paused"}
           </button>
-          <span className="page-refresh">Updated {formatTime(new Date().toISOString())}</span>
+          <span className="page-refresh">
+            {lastRefresh ? `Updated ${formatTime(lastRefresh.toISOString())}` : "Connecting…"}
+          </span>
         </div>
       </header>
 
-      <div className="page-notice">
-        <strong>Layout preview.</strong> This route is the planned structure only —
-        the figures, stream rows and history below are placeholders, and the
-        override form does not dispatch. Filtering, paging and dispatch are all
-        API-side; the controls here just hold the query.
-      </div>
+      {error && (
+        <div className="page-error">
+          <strong>API unreachable.</strong> {error} — start the backend with{" "}
+          <code>dotnet run</code> in <code>smart-x-backend/SmartX.Api</code>.
+        </div>
+      )}
 
       {/* Overview: dispatch health before any individual command. */}
       <section className="stat-row" aria-label="Command overview">
         <StatTile
           label="Dispatch rate"
-          value="9.4"
+          value={summary ? summary.dispatchRate.toFixed(1) : "—"}
           unit="/min"
           tone="accent"
-          hint="Across all origins"
+          hint={summary ? `${formatNumber(summary.totalCount)} in the last ${windowLabel}` : undefined}
         />
 
-        <StatTile label="In flight" value={pending.length} unit="awaiting ack">
+        <StatTile
+          label="In flight"
+          value={summary ? summary.inFlightCount : "—"}
+          unit="awaiting ack"
+        >
           <div className="status-breakdown">
-            <span className="status-chip">3 queued</span>
-            <span className="status-chip status-warning">2 retrying</span>
+            <span className="status-chip">{summary?.queuedCount ?? 0} queued</span>
+            <span className="status-chip status-warning">
+              {summary?.retryingCount ?? 0} retrying
+            </span>
           </div>
         </StatTile>
 
         <StatTile
           label="Acknowledged"
-          value="97.2"
+          value={summary ? summary.acknowledgedRate.toFixed(1) : "—"}
           unit="%"
-          progress={97.2}
-          hint="Last 24 hours"
+          tone={ackTone}
+          progress={summary?.acknowledgedRate}
+          hint={`Of settled commands, last ${windowLabel}`}
         />
 
         <StatTile
           label="Failed"
-          value="11"
-          tone="danger"
-          hint="4 expired without acknowledgement"
+          value={summary ? summary.failedCount : "—"}
+          tone={failedTone}
+          hint={summary ? `${summary.expiredCount} expired without acknowledgement` : undefined}
         />
 
         <StatTile
           label="Manual overrides"
-          value="26"
+          value={summary ? summary.manualOverrideCount : "—"}
           tone="warning"
-          hint="Today, across 9 operators"
+          hint={summary ? `Last ${windowLabel}, across ${summary.operatorCount} operators` : undefined}
         />
 
         <StatTile
           label="Round trip"
-          value="284"
+          value={summary ? summary.medianRoundTripMs : "—"}
           unit="ms"
           hint="Median, acknowledged commands"
         />
@@ -151,37 +254,39 @@ function CommandsPage() {
           <h2>Dispatch throughput</h2>
           <span className="panel-head-count">commands per minute</span>
         </header>
-        <ThroughputStrip values={PLACEHOLDER_THROUGHPUT} windowLabel={windowLabel} />
+        <ThroughputStrip values={summary?.throughput ?? []} windowLabel={windowLabel} />
       </section>
 
       <CommandFilterBar
+        options={options}
         filters={filters}
-        zones={PLACEHOLDER_ZONES}
-        resultCount={commands.length}
+        resultCount={stream.length}
         totalCount={totalCount}
         onChange={handleFilterChange}
       />
 
       <div className="commands-grid">
         <CommandStream
-          commands={commands}
+          commands={stream}
           selectedId={selectedId}
           live={live}
+          loading={loading}
           onSelect={handleSelect}
         />
 
         <OverrideConsole
-          nodes={PLACEHOLDER_NODES}
+          options={options}
           targetNode={targetNode}
           pending={pending}
           onTargetChange={setTargetNode}
+          onDispatch={handleDispatch}
         />
       </div>
 
       <CommandHistoryTable
-        commands={commands}
-        page={page}
-        pageSize={PAGE_SIZE}
+        commands={history?.items ?? []}
+        page={history?.page ?? page}
+        pageSize={history?.pageSize ?? PAGE_SIZE}
         totalCount={totalCount}
         onPageChange={setPage}
       />

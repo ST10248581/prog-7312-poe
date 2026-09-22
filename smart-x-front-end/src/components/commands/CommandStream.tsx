@@ -5,6 +5,8 @@ interface CommandStreamProps {
   commands: CommandRecord[];
   selectedId: string | null;
   live: boolean;
+  /** First paint only; refreshes swap rows in place rather than emptying the list. */
+  loading: boolean;
   onSelect: (command: CommandRecord) => void;
 }
 
@@ -13,7 +15,13 @@ interface CommandStreamProps {
  * every row is a jump-off point: selecting one targets the override console at
  * that node so issuing a correction never means retyping the node id.
  */
-function CommandStream({ commands, selectedId, live, onSelect }: CommandStreamProps) {
+function CommandStream({
+  commands,
+  selectedId,
+  live,
+  loading,
+  onSelect,
+}: CommandStreamProps) {
   return (
     <section className="command-stream-panel" aria-label="Live command stream">
       <header className="panel-head">
@@ -22,12 +30,16 @@ function CommandStream({ commands, selectedId, live, onSelect }: CommandStreamPr
           <span className={`stream-state${live ? " live" : ""}`}>
             {live ? "streaming" : "paused"}
           </span>
-          <span className="panel-head-count">{commands.length} in window</span>
+          <span className="panel-head-count">
+            {loading ? "loading…" : `${commands.length} in window`}
+          </span>
         </div>
       </header>
 
       {commands.length === 0 ? (
-        <p className="panel-empty">No commands match the current filters.</p>
+        <p className="panel-empty">
+          {loading ? "Loading the command stream…" : "No commands match the current filters."}
+        </p>
       ) : (
         <ul className="command-stream">
           {commands.map((command) => (

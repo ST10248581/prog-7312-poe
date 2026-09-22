@@ -27,4 +27,16 @@ public class SeedOptions
     public int BatchIntervalMinutes { get; set; } = 60;
 
     public int EngagementUserCount { get; set; } = 8;
+
+    /// <summary>How far back the back-filled command log reaches.</summary>
+    public int CommandHistoryHours { get; set; } = 48;
+
+    /// <summary>Average dispatch rate used to size the back-filled command log.</summary>
+    public double CommandsPerMinute { get; set; } = 1.2;
+
+    /// <summary>
+    /// Newest-first cap on the live command log. The simulator adds to it on a
+    /// timer, so without a cap a long-running process grows without bound.
+    /// </summary>
+    public int MaxCommandLogSize { get; set; } = 20_000;
 }

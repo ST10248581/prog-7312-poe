@@ -42,6 +42,7 @@ function CommandHistoryTable({
               <th>Command</th>
               <th>Parameters</th>
               <th>Origin</th>
+              <th>Priority</th>
               <th>Issued by</th>
               <th>Status</th>
               <th>Retries</th>
@@ -57,12 +58,18 @@ function CommandHistoryTable({
                 <td className="mono">{formatDateTime(command.issuedUtc)}</td>
                 <td className="mono">{command.nodeId}</td>
                 <td>{humanise(command.commandType)}</td>
-                <td className="mono">{command.parameters}</td>
+                <td className="mono">
+                  {command.parameters}
+                  {/* A dry run never reached the node, so the row should not
+                      read as evidence that it did. */}
+                  {command.isDryRun && <span className="command-dry-run">dry run</span>}
+                </td>
                 <td>
                   <span className={`command-origin origin-${command.origin.toLowerCase()}`}>
                     {command.origin}
                   </span>
                 </td>
+                <td>{command.priority}</td>
                 <td>{command.issuedBy}</td>
                 <td>
                   <span

@@ -1,46 +1,32 @@
 /**
- * Layout-stage contract for the command stream page.
+ * Page-local contract for the command stream.
  *
- * Nothing here is wired to the API yet. These shapes mirror what the planned
- * `/api/commands` endpoints are expected to return so the components can be
- * swapped onto real data without a rewrite: the page holds `CommandFilters`,
- * sends it to the server, and renders whatever comes back. No filtering,
- * sorting or paging happens in the browser.
+ * The record and enum shapes now come from `apiService` — the API is the single
+ * source of truth for what a command is. What stays here is the filter state
+ * the page holds and the fallback option lists: the page sends `CommandFilters`
+ * to the server and renders whatever comes back, so nothing is filtered,
+ * sorted or paged in the browser.
  */
 
-export type CommandStatus = "Queued" | "Sent" | "Acknowledged" | "Failed" | "Expired";
+import type {
+  CommandOrigin,
+  CommandPriority,
+  CommandStatus,
+  CommandType,
+  DeviceCommand,
+} from "../../services/apiService";
 
-export type CommandOrigin = "Automation" | "Manual" | "Schedule";
+export type {
+  CommandOrigin,
+  CommandPriority,
+  CommandStatus,
+  CommandType,
+  DeviceCommand,
+};
 
-export type CommandType =
-  | "SetThreshold"
-  | "Recalibrate"
-  | "ToggleActuator"
-  | "RestartNode"
-  | "FirmwarePush"
-  | "RequestSample";
+/** The command record as rendered by this page. */
+export type CommandRecord = DeviceCommand;
 
-export interface CommandRecord {
-  id: string;
-  issuedUtc: string;
-  nodeId: string;
-  sensorName: string;
-  zone: string;
-  commandType: CommandType;
-  /** Rendered as-is in the stream, e.g. `temp.max=28.5`. */
-  parameters: string;
-  origin: CommandOrigin;
-  status: CommandStatus;
-  /** Time from dispatch to acknowledgement; null while still in flight. */
-  roundTripMs: number | null;
-  issuedBy: string;
-  retries: number;
-}
-
-/**
- * The whole filter state, sent to the API as one query. Empty arrays mean
- * "no constraint" rather than "match nothing".
- */
 export interface CommandFilters {
   statuses: CommandStatus[];
   origins: CommandOrigin[];
@@ -48,7 +34,7 @@ export interface CommandFilters {
   zone: string;
   /** Minutes of history to request. */
   windowMinutes: number;
-  /** Free text matched server-side against node id and sensor name. */
+  /** Free text matched server-side against node id, sensor name and operator. */
   search: string;
   manualOnly: boolean;
 }
@@ -64,9 +50,9 @@ export const EMPTY_FILTERS: CommandFilters = {
 };
 
 /**
- * Option lists are hard-coded for the layout pass. The real page fetches them
- * from the API the way `FilterBar` already does on the telemetry route, so the
- * server stays the single source of truth for what is filterable.
+ * Fallbacks for the filter controls. `/api/commands/filter-options` is the real
+ * source; these only stand in for the first paint and for the case where the
+ * API is unreachable, so the controls are never an empty row.
  */
 export const COMMAND_STATUSES: CommandStatus[] = [
   "Queued",
@@ -87,9 +73,31 @@ export const COMMAND_TYPES: CommandType[] = [
   "RequestSample",
 ];
 
+export const COMMAND_PRIORITIES: CommandPriority[] = ["Normal", "High", "Immediate"];
+
+/** Human-readable note on what each priority does to the queue. */
+export const PRIORITY_HINTS: Record<CommandPriority, string> = {
+  Normal: "Normal — queued behind automation",
+  High: "High — jumps the queue",
+  Immediate: "Immediate — pre-empts in-flight work",
+};
+
 export const TIME_WINDOWS = [
   { label: "15m", minutes: 15 },
   { label: "1h", minutes: 60 },
   { label: "6h", minutes: 360 },
   { label: "24h", minutes: 1440 },
 ];
+
+/** Turns the page's filter state into the query the API expects. */
+export function toCommandQuery(filters: CommandFilters) {
+  return {
+    statuses: filters.statuses,
+    origins: filters.origins,
+    commandTypes: filters.commandTypes,
+    zone: filters.zone,
+    search: filters.search,
+    manualOnly: filters.manualOnly,
+    windowMinutes: filters.windowMinutes,
+  };
+}

@@ -1,14 +1,22 @@
 import { useState } from "react";
 import { formatRelative, humanise } from "../../utils/format";
-import { COMMAND_TYPES } from "./types";
-import type { CommandRecord, CommandType } from "./types";
+import { COMMAND_PRIORITIES, COMMAND_TYPES, PRIORITY_HINTS } from "./types";
+import type { CommandPriority, CommandRecord, CommandType } from "./types";
+import type {
+  CommandFilterOptions,
+  DeviceCommand,
+  DispatchCommandRequest,
+} from "../../services/apiService";
 
 interface OverrideConsoleProps {
-  nodes: string[];
+  /** Straight from `/api/commands/filter-options`; null until it arrives. */
+  options: CommandFilterOptions | null;
   /** Node id taken from the stream selection; the operator can still change it. */
   targetNode: string;
   pending: CommandRecord[];
   onTargetChange: (nodeId: string) => void;
+  /** Resolves with the queued command, or rejects with the API's reason. */
+  onDispatch: (request: DispatchCommandRequest) => Promise<DeviceCommand>;
 }
 
 /** Hint text per command so the parameter field is never a blank guess. */
@@ -26,22 +34,70 @@ const PARAMETER_HINTS: Record<CommandType, string> = {
  * command, then confirms it against a written summary of what will be sent —
  * a dispatch to live hardware should not be one stray click.
  *
- * Layout stage: the form holds its own state and dispatch is disabled. The
- * submit handler is where `POST /api/commands` will go.
+ * Submitting POSTs to `/api/commands`. The API validates the target and either
+ * queues the command, where the dispatch simulator picks it up and it appears
+ * in the stream alongside automated traffic, or rejects it with a reason that
+ * is shown here rather than swallowed.
  */
 function OverrideConsole({
-  nodes,
+  options,
   targetNode,
   pending,
   onTargetChange,
+  onDispatch,
 }: OverrideConsoleProps) {
   const [commandType, setCommandType] = useState<CommandType>("SetThreshold");
   const [parameters, setParameters] = useState("");
-  const [priority, setPriority] = useState("Normal");
+  const [priority, setPriority] = useState<CommandPriority>("Normal");
   const [dryRun, setDryRun] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
 
-  const ready = targetNode !== "" && parameters.trim() !== "" && confirmed;
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState<DeviceCommand | null>(null);
+
+  const nodes = options?.nodes ?? [];
+  const priorities = options?.priorities ?? COMMAND_PRIORITIES;
+  const commandTypes = options?.commandTypes ?? COMMAND_TYPES;
+
+  const ready = targetNode !== "" && parameters.trim() !== "" && confirmed && !sending;
+
+  // Confirmation is per dispatch: the tick clears after each send so the next
+  // command has to be checked on its own terms.
+  const resetConfirmation = () => {
+    setParameters("");
+    setConfirmed(false);
+  };
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!ready) {
+      return;
+    }
+
+    setSending(true);
+    setError(null);
+    setSent(null);
+
+    try {
+      const command = await onDispatch({
+        nodeId: targetNode,
+        commandType,
+        parameters: parameters.trim(),
+        priority,
+        dryRun,
+      });
+
+      setSent(command);
+      resetConfirmation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dispatch failed.");
+      setConfirmed(false);
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <section className="override-console" aria-label="Manual override">
@@ -56,13 +112,7 @@ function OverrideConsole({
         alongside automated traffic.
       </p>
 
-      <form
-        className="override-form"
-        onSubmit={(event) => {
-          // Layout stage: nothing is dispatched. POST /api/commands lands here.
-          event.preventDefault();
-        }}
-      >
+      <form className="override-form" onSubmit={handleSubmit}>
         <label className="override-field">
           <span className="override-label">Target node</span>
           <select
@@ -70,13 +120,18 @@ function OverrideConsole({
             value={targetNode}
             onChange={(event) => onTargetChange(event.target.value)}
           >
-            <option value="">Select a node…</option>
+            <option value="">
+              {nodes.length === 0 ? "No reachable nodes" : "Select a node…"}
+            </option>
             {nodes.map((node) => (
               <option key={node} value={node}>
                 {node}
               </option>
             ))}
           </select>
+          <span className="override-hint">
+            Only nodes the mesh can currently reach are listed.
+          </span>
         </label>
 
         <label className="override-field">
@@ -86,7 +141,7 @@ function OverrideConsole({
             value={commandType}
             onChange={(event) => setCommandType(event.target.value as CommandType)}
           >
-            {COMMAND_TYPES.map((type) => (
+            {commandTypes.map((type) => (
               <option key={type} value={type}>
                 {humanise(type)}
               </option>
@@ -113,11 +168,13 @@ function OverrideConsole({
           <select
             className="override-input"
             value={priority}
-            onChange={(event) => setPriority(event.target.value)}
+            onChange={(event) => setPriority(event.target.value as CommandPriority)}
           >
-            <option value="Normal">Normal — queued behind automation</option>
-            <option value="High">High — jumps the queue</option>
-            <option value="Immediate">Immediate — pre-empts in-flight work</option>
+            {priorities.map((value) => (
+              <option key={value} value={value}>
+                {PRIORITY_HINTS[value] ?? value}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -159,11 +216,11 @@ function OverrideConsole({
             disabled={!ready}
             title={
               ready
-                ? "Dispatch is not wired up yet"
+                ? "Queue this command on the node"
                 : "Choose a target, enter parameters and confirm"
             }
           >
-            Queue override
+            {sending ? "Queueing…" : "Queue override"}
           </button>
           <button
             type="button"
@@ -173,6 +230,8 @@ function OverrideConsole({
               setConfirmed(false);
               setPriority("Normal");
               setDryRun(true);
+              setError(null);
+              setSent(null);
               onTargetChange("");
             }}
           >
@@ -180,9 +239,20 @@ function OverrideConsole({
           </button>
         </div>
 
-        <p className="override-pending-note">
-          Dispatch is not connected yet — this form is the planned layout only.
-        </p>
+        {/* Outcome of the last dispatch, stated rather than implied — an
+            override that quietly did nothing is the worst case here. */}
+        {error && (
+          <p className="override-result override-result-error" role="alert">
+            <strong>Rejected.</strong> {error}
+          </p>
+        )}
+
+        {sent && !error && (
+          <p className="override-result override-result-ok" role="status">
+            <strong>Queued.</strong> {humanise(sent.commandType)} on {sent.nodeId}
+            {sent.isDryRun ? " as a dry run" : ""} — watch for it in the stream.
+          </p>
+        )}
       </form>
 
       <div className="override-pending">
