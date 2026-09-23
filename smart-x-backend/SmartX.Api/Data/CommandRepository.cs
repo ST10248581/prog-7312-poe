@@ -16,6 +16,18 @@ public class CommandRepository : ICommandRepository
     /// <summary>Bars in the throughput strip. Fixed, so the chart keeps its shape as the window changes.</summary>
     private const int ThroughputBuckets = 30;
 
+    /// <summary>
+    /// How far back an alert still counts as describing the node's state now.
+    ///
+    /// Deliberately not the command window: an alert raised two hours ago still
+    /// matters to a command being sent this minute, so a 15m stream would
+    /// otherwise report every node as clear. Deliberately not unbounded either —
+    /// a mesh accumulates unresolved alerts, and if every node is alerting then
+    /// the filter says nothing. A day is the horizon over which an open alert is
+    /// still the node's current condition rather than its history.
+    /// </summary>
+    private const int AlertHorizonHours = 24;
+
     private readonly ISmartXDataStore _store;
 
     public CommandRepository(ISmartXDataStore store)
@@ -58,6 +70,12 @@ public class CommandRepository : ICommandRepository
         var sent = matches.Count(command => command.Status == CommandStatus.Sent);
         var manual = matches.Where(command => command.Origin == CommandOrigin.Manual).ToList();
 
+        // Commands aimed at a node that is alerting right now — the overlap
+        // between the two filters, reported whether or not either is applied.
+        var alerting = matches
+            .Where(command => command.NodeAlertState == NodeAlertState.Active)
+            .ToList();
+
         // Settled means the command reached a terminal state. Anything still in
         // flight is not a failure yet, so it stays out of the success rate.
         var settled = acknowledged.Count + failed + expired;
@@ -82,6 +100,13 @@ public class CommandRepository : ICommandRepository
                 .Where(command => command.RoundTripMs.HasValue)
                 .Select(command => command.RoundTripMs!.Value)),
             TotalCount = matches.Count,
+            AlertingCommandCount = alerting.Count,
+            AlertingNodeCount = alerting.Select(command => command.SensorProfileId).Distinct().Count(),
+            // Every category is present, zeroes included, so the filter bar can
+            // show a count against a category that currently has no traffic.
+            CategoryCounts = Enum.GetValues<OperationCategory>().ToDictionary(
+                category => category.ToString(),
+                category => matches.Count(command => command.OperationCategory == category)),
             Throughput = BuildThroughput(matches, now, windowMinutes),
             GeneratedUtc = now
         };
@@ -95,6 +120,20 @@ public class CommandRepository : ICommandRepository
             Origins = Enum.GetNames<CommandOrigin>().ToList(),
             CommandTypes = Enum.GetNames<CommandType>().ToList(),
             Priorities = Enum.GetNames<CommandPriority>().ToList(),
+            // The category list carries its command types, so the UI can say
+            // what a category selects without repeating the mapping the API
+            // filters by.
+            OperationCategories = Enum.GetValues<OperationCategory>()
+                .Select(category => new OperationCategoryOption
+                {
+                    Category = category.ToString(),
+                    CommandTypes = CommandOperations.TypesIn(category)
+                        .Select(type => type.ToString())
+                        .ToList()
+                })
+                .ToList(),
+            AlertStates = Enum.GetNames<NodeAlertState>().ToList(),
+            AlertSeverities = Enum.GetNames<AlertSeverity>().ToList(),
             Zones = _store.SensorProfiles
                 .Select(sensor => sensor.Zone)
                 .Distinct()
@@ -136,7 +175,20 @@ public class CommandRepository : ICommandRepository
                 .ToList();
         }
 
-        IEnumerable<DeviceCommand> matches = commands;
+        // Alert context is attached before the filters run, because two of them
+        // are conditions on it. Every command that survives therefore carries
+        // the context the dashboard renders, so the badge on a row and the
+        // reason the row came back always agree.
+        var alertContexts = BuildAlertContexts();
+
+        IEnumerable<DeviceCommand> matches = commands.Select(command =>
+        {
+            var context = alertContexts.TryGetValue(command.SensorProfileId, out var found)
+                ? found
+                : NodeAlertContext.None;
+
+            return command.WithAlertContext(context.State, context.Severity, context.OpenCount);
+        });
 
         if (query.Statuses is { Count: > 0 })
         {
@@ -151,6 +203,27 @@ public class CommandRepository : ICommandRepository
         if (query.CommandTypes is { Count: > 0 })
         {
             matches = matches.Where(command => query.CommandTypes.Contains(command.CommandType));
+        }
+
+        if (query.OperationCategories is { Count: > 0 })
+        {
+            matches = matches.Where(command =>
+                query.OperationCategories.Contains(command.OperationCategory));
+        }
+
+        if (query.AlertStates is { Count: > 0 })
+        {
+            matches = matches.Where(command => query.AlertStates.Contains(command.NodeAlertState));
+        }
+
+        if (query.MinAlertSeverity.HasValue)
+        {
+            // A node with nothing open has no severity, so it cannot clear a
+            // severity floor: asking for Critical and above is asking for the
+            // nodes that are alerting that badly.
+            matches = matches.Where(command =>
+                command.NodeAlertSeverity.HasValue &&
+                command.NodeAlertSeverity.Value >= query.MinAlertSeverity.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Zone))
@@ -170,11 +243,70 @@ public class CommandRepository : ICommandRepository
             matches = matches.Where(command =>
                 command.NodeId.Contains(term, StringComparison.OrdinalIgnoreCase) ||
                 command.SensorName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                command.Zone.Contains(term, StringComparison.OrdinalIgnoreCase) ||
                 command.Parameters.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                command.IssuedBy.Contains(term, StringComparison.OrdinalIgnoreCase));
+                command.IssuedBy.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                // Typed words match the labels an operator reads on screen, not
+                // the PascalCase names behind them: both "restart node" and
+                // "maintenance" find a RestartNode command.
+                MatchesLabel(command.CommandType.ToString(), term) ||
+                MatchesLabel(command.OperationCategory.ToString(), term) ||
+                MatchesLabel(command.Status.ToString(), term) ||
+                MatchesLabel(command.Origin.ToString(), term));
         }
 
         return matches.OrderByDescending(command => command.IssuedUtc).ToList();
+    }
+
+    /// <summary>
+    /// The worst alert state per node, in one pass over the alert log. Alerts
+    /// are grouped rather than looked up per command because a busy node has
+    /// many commands and one alert history.
+    /// </summary>
+    private Dictionary<Guid, NodeAlertContext> BuildAlertContexts()
+    {
+        var horizon = DateTime.UtcNow.AddHours(-AlertHorizonHours);
+
+        return _store.Alerts
+            .Where(alert => alert.TriggeredUtc >= horizon)
+            .GroupBy(alert => alert.SensorProfileId)
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    var open = group
+                        .Where(alert => alert.Status != AlertStatus.Resolved)
+                        .ToList();
+
+                    // Resolved rather than Clear: the node did alert inside the
+                    // horizon, it just has nothing outstanding now.
+                    var state = open.Count == 0
+                        ? NodeAlertState.Resolved
+                        : open.Any(alert => alert.Status == AlertStatus.Active)
+                            ? NodeAlertState.Active
+                            : NodeAlertState.Acknowledged;
+
+                    return new NodeAlertContext(
+                        state,
+                        open.Count == 0 ? null : open.Max(alert => alert.Severity),
+                        open.Count);
+                });
+    }
+
+    /// <summary>
+    /// Case-insensitive match that also ignores the word break a PascalCase
+    /// name loses when it is displayed, so "restart node" matches RestartNode.
+    /// </summary>
+    private static bool MatchesLabel(string name, string term)
+    {
+        if (name.Contains(term, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var collapsed = term.Replace(" ", string.Empty);
+        return collapsed.Length > 0 &&
+               name.Contains(collapsed, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -224,5 +356,15 @@ public class CommandRepository : ICommandRepository
     private static int NormaliseWindow(int windowMinutes)
     {
         return Math.Clamp(windowMinutes, 5, 60 * 24 * 7);
+    }
+
+    /// <summary>The alert picture for one node, as the command query needs it.</summary>
+    private readonly record struct NodeAlertContext(
+        NodeAlertState State,
+        AlertSeverity? Severity,
+        int OpenCount)
+    {
+        /// <summary>A node with nothing recent against it.</summary>
+        public static readonly NodeAlertContext None = new(NodeAlertState.Clear, null, 0);
     }
 }

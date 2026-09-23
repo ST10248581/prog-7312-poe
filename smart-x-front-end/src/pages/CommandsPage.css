@@ -572,3 +572,179 @@
   font-size: 0.6875rem;
   color: var(--text-muted);
 }
+
+/* ============================================================
+   Search and filter — operation categories and node alert state
+   ============================================================ */
+
+/* ---------- Search box ----------
+   Typing is debounced, so the box says when a request is still coming rather
+   than leaving the operator wondering whether the filter took. */
+
+.filter-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-search-pending {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ---------- Operation categories ----------
+   One hue per category, shared by the filter chip and the tag on every row, so
+   a category reads the same in the filter bar and in the stream. */
+
+.category-configuration { --category-tone: #818cf8; }
+.category-maintenance { --category-tone: var(--warning); }
+.category-control { --category-tone: #38bdf8; }
+.category-diagnostics { --category-tone: var(--text-secondary); }
+
+.filter-chip[class*="category-"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--category-tone, var(--text-muted));
+}
+
+.filter-chip-count {
+  margin-left: 0.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+
+.filter-chip.active .filter-chip-count {
+  color: var(--accent);
+}
+
+.command-category {
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--category-tone, var(--text-muted));
+  color: var(--category-tone, var(--text-muted));
+  background: transparent;
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ---------- Node alert state ----------
+   Escalating: Active carries the danger tone, Acknowledged the warning tone,
+   and a node with nothing outstanding carries no badge at all. */
+
+.filter-chip.alert-state-active .filter-chip-dot { background: var(--danger); }
+.filter-chip.alert-state-acknowledged .filter-chip-dot { background: var(--warning); }
+.filter-chip.alert-state-resolved .filter-chip-dot { background: var(--accent); }
+.filter-chip.alert-state-clear .filter-chip-dot { background: var(--text-muted); }
+
+.node-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--alert-tone, var(--warning));
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  vertical-align: middle;
+}
+
+.node-alert-active { --alert-tone: var(--danger); }
+.node-alert-acknowledged { --alert-tone: var(--warning); }
+
+/* Severity sharpens the state rather than replacing it: an acknowledged
+   critical still reads as the calmer of the two states it could be in. */
+.node-alert.severity-info { opacity: 0.75; }
+
+.node-alert-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--alert-tone, var(--warning));
+}
+
+.node-alert-active .node-alert-dot {
+  animation: alert-pulse 2s ease-in-out infinite;
+}
+
+@keyframes alert-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node-alert-active .node-alert-dot { animation: none; }
+}
+
+/* ---------- Active filter summary ----------
+   Every narrowing in one row, each one removable, so an empty stream is never
+   a mystery. Full width under the controls. */
+
+.filter-active {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.filter-active-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.filter-active-chip:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ---------- Overview to filter ----------
+   The shortcut under the alerting-nodes tile. */
+
+.stat-tile-action {
+  margin-top: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.stat-tile-action:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.stat-tile-action.active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent);
+}

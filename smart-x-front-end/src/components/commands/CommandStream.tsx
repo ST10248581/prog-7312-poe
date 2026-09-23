@@ -1,4 +1,5 @@
 import { formatRelative, formatTime, humanise } from "../../utils/format";
+import NodeAlertBadge from "./NodeAlertBadge";
 import type { CommandRecord } from "./types";
 
 interface CommandStreamProps {
@@ -54,9 +55,19 @@ function CommandStream({
               >
                 <span className="command-row-time">{formatTime(command.issuedUtc)}</span>
 
-                <span className="command-row-node">{command.nodeId}</span>
+                <span className="command-row-node">
+                  {command.nodeId}
+                  <NodeAlertBadge command={command} />
+                </span>
 
                 <span className="command-row-main">
+                  {/* The category is what the filter selects on, so it is shown
+                      on the row rather than left implied by the command type. */}
+                  <span
+                    className={`command-category category-${command.operationCategory.toLowerCase()}`}
+                  >
+                    {command.operationCategory}
+                  </span>
                   <span className="command-row-type">{humanise(command.commandType)}</span>
                   <code className="command-row-params">{command.parameters}</code>
                 </span>

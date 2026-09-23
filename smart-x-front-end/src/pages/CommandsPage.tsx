@@ -117,11 +117,13 @@ function CommandsPage() {
     return () => window.clearInterval(timer);
   }, [live, filters, page, loadCommands]);
 
-  const handleFilterChange = (next: CommandFilters) => {
+  // Memoised because the filter bar debounces the search box against it: a new
+  // identity on every poll would reset that timer before it ever fired.
+  const handleFilterChange = useCallback((next: CommandFilters) => {
     setFilters(next);
     // A new slice invalidates the page cursor.
     setPage(1);
-  };
+  }, []);
 
   // Selecting a row aims the override console at that node — correcting a bad
   // command should not mean retyping its target.
@@ -150,6 +152,9 @@ function CommandsPage() {
   );
 
   const totalCount = history?.totalCount ?? 0;
+
+  /** Whether the page is already narrowed to nodes with an active alert. */
+  const alertFocus = filters.alertStates.includes("Active");
 
   const failedTone = summary && summary.failedCount > 0 ? "danger" : "default";
   const ackTone =
@@ -245,6 +250,35 @@ function CommandsPage() {
           unit="ms"
           hint="Median, acknowledged commands"
         />
+
+        {/* Overview → filter, in one step: the tile counts the traffic going to
+            nodes that are alerting, and the button under it narrows the whole
+            page to exactly that traffic. */}
+        <StatTile
+          label="Alerting nodes"
+          value={summary ? summary.alertingNodeCount : "—"}
+          tone={summary && summary.alertingCommandCount > 0 ? "warning" : "default"}
+          hint={
+            summary
+              ? `${formatNumber(summary.alertingCommandCount)} commands to nodes with an unacknowledged alert`
+              : undefined
+          }
+        >
+          <button
+            type="button"
+            className={`stat-tile-action${alertFocus ? " active" : ""}`}
+            onClick={() =>
+              handleFilterChange({
+                ...filters,
+                alertStates: alertFocus
+                  ? filters.alertStates.filter((state) => state !== "Active")
+                  : [...filters.alertStates, "Active"],
+              })
+            }
+          >
+            {alertFocus ? "Showing only these" : "Show only these"}
+          </button>
+        </StatTile>
       </section>
 
       {/* Visualises the incoming stream as a rate, so a burst or a stall is
@@ -262,6 +296,7 @@ function CommandsPage() {
         filters={filters}
         resultCount={stream.length}
         totalCount={totalCount}
+        categoryCounts={summary?.categoryCounts}
         onChange={handleFilterChange}
       />
 

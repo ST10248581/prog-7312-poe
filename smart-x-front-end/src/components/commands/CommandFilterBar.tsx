@@ -1,13 +1,28 @@
+import { useEffect, useState } from "react";
 import { humanise } from "../../utils/format";
 import {
+  ALERT_SEVERITIES,
+  ALERT_STATE_HINTS,
+  CATEGORY_HINTS,
   COMMAND_ORIGINS,
   COMMAND_STATUSES,
   COMMAND_TYPES,
   EMPTY_FILTERS,
+  NODE_ALERT_STATES,
+  OPERATION_CATEGORIES,
   TIME_WINDOWS,
+  describeFilters,
+  hasActiveFilters,
+  removeFilter,
 } from "./types";
-import type { CommandFilters } from "./types";
+import type { AlertSeverity, CommandFilters, OperationCategory } from "./types";
 import type { CommandFilterOptions } from "../../services/apiService";
+
+/**
+ * How long the search box waits before asking the API. Every keystroke is a
+ * request otherwise, and three endpoints answer each one.
+ */
+const SEARCH_DEBOUNCE_MS = 350;
 
 interface CommandFilterBarProps {
   /** Straight from `/api/commands/filter-options`; null until it arrives. */
@@ -15,6 +30,8 @@ interface CommandFilterBarProps {
   filters: CommandFilters;
   resultCount: number;
   totalCount: number;
+  /** Per-category counts from the summary, so a chip can show what it holds. */
+  categoryCounts?: Record<string, number>;
   onChange: (filters: CommandFilters) => void;
 }
 
@@ -32,14 +49,53 @@ function CommandFilterBar({
   filters,
   resultCount,
   totalCount,
+  categoryCounts,
   onChange,
 }: CommandFilterBarProps) {
+  // The search box is the one control the page does not own outright: it types
+  // faster than the API should be asked, so the draft lives here and is pushed
+  // up once typing settles.
+  const [searchDraft, setSearchDraft] = useState(filters.search);
+
+  // A reset from outside — Clear, or the chip for the search term — has to win
+  // over whatever is sitting in the box.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    setSearchDraft(filters.search);
+  }, [filters.search]);
+
+  useEffect(() => {
+    if (searchDraft === filters.search) {
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => onChange({ ...filters, search: searchDraft }),
+      SEARCH_DEBOUNCE_MS,
+    );
+
+    return () => window.clearTimeout(timer);
+  }, [searchDraft, filters, onChange]);
+
   const statuses = options?.statuses ?? COMMAND_STATUSES;
   const origins = options?.origins ?? COMMAND_ORIGINS;
   const commandTypes = options?.commandTypes ?? COMMAND_TYPES;
   const zones = options?.zones ?? [];
+  const alertStates = options?.alertStates ?? NODE_ALERT_STATES;
+  const severities = options?.alertSeverities ?? ALERT_SEVERITIES;
 
-  type ChipKey = "statuses" | "origins" | "commandTypes";
+  // The API sends each category with the command types it covers, so the chip
+  // can say what selecting it will include without repeating the mapping.
+  const categories: OperationCategory[] =
+    options?.operationCategories.map((option) => option.category) ?? OPERATION_CATEGORIES;
+
+  const categoryTypes = (category: OperationCategory) =>
+    options?.operationCategories
+      .find((option) => option.category === category)
+      ?.commandTypes.map(humanise)
+      .join(", ");
+
+  type ChipKey = "statuses" | "origins" | "commandTypes" | "operationCategories" | "alertStates";
 
   const toggle = <K extends ChipKey>(key: K, value: CommandFilters[K][number]) => {
     const current = filters[key] as CommandFilters[K][number][];
@@ -53,17 +109,107 @@ function CommandFilterBar({
   const isActive = (key: ChipKey, value: string) =>
     (filters[key] as string[]).includes(value);
 
-  const hasFilters =
-    filters.statuses.length > 0 ||
-    filters.origins.length > 0 ||
-    filters.commandTypes.length > 0 ||
-    filters.zone !== "" ||
-    filters.search !== "" ||
-    filters.manualOnly ||
-    filters.windowMinutes !== EMPTY_FILTERS.windowMinutes;
+  const activeChips = describeFilters(filters);
 
   return (
-    <section className="filter-bar command-filter-bar" aria-label="Filter commands">
+    <section className="filter-bar command-filter-bar" aria-label="Search and filter commands">
+      {/* Search leads: it is the fastest way to a node, and the API matches it
+          against the command type and category labels too, so typing a category
+          name works before the chips below are even read. */}
+      <div className="filter-group filter-group-search">
+        <label className="filter-group-label" htmlFor="command-search">
+          Search
+        </label>
+        <div className="filter-search-wrap">
+          <input
+            id="command-search"
+            type="search"
+            className="filter-search"
+            placeholder="Node, sensor, zone, operator, parameters or command…"
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+          />
+          {searchDraft !== filters.search && (
+            <span className="filter-search-pending" aria-live="polite">
+              searching…
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="filter-group">
+        <span className="filter-group-label">Operation category</span>
+        <div className="filter-chips">
+          {categories.map((category) => {
+            const count = categoryCounts?.[category];
+
+            return (
+              <button
+                key={category}
+                type="button"
+                className={`filter-chip category-${category.toLowerCase()}${
+                  isActive("operationCategories", category) ? " active" : ""
+                }`}
+                title={`${CATEGORY_HINTS[category]}${
+                  categoryTypes(category) ? ` — ${categoryTypes(category)}` : ""
+                }`}
+                onClick={() => toggle("operationCategories", category)}
+              >
+                {category}
+                {count !== undefined && <span className="filter-chip-count">{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* The alert facet describes the node a command was aimed at, not the
+          command itself — the "what was being sent to the nodes that are
+          alerting right now" question. */}
+      <div className="filter-group">
+        <span className="filter-group-label">Node alert</span>
+        <div className="filter-chips">
+          {alertStates.map((state) => (
+            <button
+              key={state}
+              type="button"
+              className={`filter-chip alert-state-${state.toLowerCase()}${
+                isActive("alertStates", state) ? " active" : ""
+              }`}
+              title={ALERT_STATE_HINTS[state]}
+              onClick={() => toggle("alertStates", state)}
+            >
+              <span className="filter-chip-dot" />
+              {state}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="filter-group">
+        <label className="filter-group-label" htmlFor="command-severity">
+          Alert severity
+        </label>
+        <select
+          id="command-severity"
+          className="filter-select"
+          value={filters.minAlertSeverity}
+          onChange={(event) =>
+            onChange({
+              ...filters,
+              minAlertSeverity: event.target.value as AlertSeverity | "",
+            })
+          }
+        >
+          <option value="">Any severity</option>
+          {severities.map((severity) => (
+            <option key={severity} value={severity}>
+              {severity} and above
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="filter-group">
         <span className="filter-group-label">Status</span>
         <div className="filter-chips">
@@ -152,20 +298,6 @@ function CommandFilterBar({
         </div>
       </div>
 
-      <div className="filter-group filter-group-search">
-        <label className="filter-group-label" htmlFor="command-search">
-          Search
-        </label>
-        <input
-          id="command-search"
-          type="search"
-          className="filter-search"
-          placeholder="Node id or sensor name…"
-          value={filters.search}
-          onChange={(event) => onChange({ ...filters, search: event.target.value })}
-        />
-      </div>
-
       <div className="filter-actions">
         <button
           type="button"
@@ -176,10 +308,10 @@ function CommandFilterBar({
         </button>
 
         <span className="filter-count">
-          <strong>{resultCount}</strong> of {totalCount} commands
+          <strong>{resultCount}</strong> streaming of {totalCount} matching
         </span>
 
-        {hasFilters && (
+        {hasActiveFilters(filters) && (
           <button
             type="button"
             className="filter-clear"
@@ -189,6 +321,27 @@ function CommandFilterBar({
           </button>
         )}
       </div>
+
+      {/* Everything narrowing the slice, in one row. With eight facets spread
+          across the bar, an empty stream is otherwise easy to misread as a
+          stalled feed rather than a filter nobody remembers setting. */}
+      {activeChips.length > 0 && (
+        <div className="filter-active" aria-label="Active filters">
+          <span className="filter-group-label">Filtering by</span>
+          {activeChips.map((chip) => (
+            <button
+              key={`${chip.key}-${chip.value}`}
+              type="button"
+              className="filter-active-chip"
+              title={`Remove ${chip.label}`}
+              onClick={() => onChange(removeFilter(filters, chip.key, chip.value))}
+            >
+              {chip.label}
+              <span aria-hidden="true">×</span>
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

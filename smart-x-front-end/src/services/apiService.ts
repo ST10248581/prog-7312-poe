@@ -366,6 +366,19 @@ export type CommandType =
   | "FirmwarePush"
   | "RequestSample";
 
+/** The kind of operation a command performs; the API maps each type to one. */
+export type OperationCategory =
+  | "Configuration"
+  | "Maintenance"
+  | "Control"
+  | "Diagnostics";
+
+/**
+ * The worst alert state standing against the node a command targets. `Clear`
+ * means no alert was ever raised; `Resolved` means none is outstanding.
+ */
+export type NodeAlertState = "Clear" | "Resolved" | "Acknowledged" | "Active";
+
 export interface DeviceCommand {
   id: string;
   sensorProfileId: string;
@@ -373,6 +386,8 @@ export interface DeviceCommand {
   sensorName: string;
   zone: string;
   commandType: CommandType;
+  /** Derived by the API from `commandType` — never sent back on a dispatch. */
+  operationCategory: OperationCategory;
   /** Rendered as-is in the stream, e.g. `temp.max=28.5`. */
   parameters: string;
   origin: CommandOrigin;
@@ -386,6 +401,13 @@ export interface DeviceCommand {
   issuedBy: string;
   retries: number;
   isDryRun: boolean;
+
+  /* Alert context, resolved by the API per request rather than stored on the
+     command — a node's alerts move independently of the commands sent to it. */
+  nodeAlertState: NodeAlertState;
+  /** Severity of the worst open alert on the node; null when there is none. */
+  nodeAlertSeverity: AlertSeverity | null;
+  nodeOpenAlertCount: number;
 }
 
 export interface CommandSummary {
@@ -401,9 +423,21 @@ export interface CommandSummary {
   operatorCount: number;
   medianRoundTripMs: number;
   totalCount: number;
+  /** Commands in the slice aimed at a node with an unacknowledged alert. */
+  alertingCommandCount: number;
+  /** Distinct nodes behind `alertingCommandCount`. */
+  alertingNodeCount: number;
+  /** How the slice splits across the operation categories, keyed by category. */
+  categoryCounts: Record<string, number>;
   /** Commands per minute across the window, oldest first. */
   throughput: number[];
   generatedUtc: string;
+}
+
+/** One operation category and the command types it groups. */
+export interface OperationCategoryOption {
+  category: OperationCategory;
+  commandTypes: CommandType[];
 }
 
 export interface CommandFilterOptions {
@@ -412,6 +446,10 @@ export interface CommandFilterOptions {
   commandTypes: CommandType[];
   priorities: CommandPriority[];
   zones: string[];
+  operationCategories: OperationCategoryOption[];
+  /** Node alert states, escalating — Clear through Active. */
+  alertStates: NodeAlertState[];
+  alertSeverities: AlertSeverity[];
   /** Node ids that can be targeted by a manual override. */
   nodes: string[];
 }
@@ -424,6 +462,12 @@ export interface CommandQuery {
   statuses?: CommandStatus[];
   origins?: CommandOrigin[];
   commandTypes?: CommandType[];
+  /** Combined with `commandTypes` using AND, not OR. */
+  operationCategories?: OperationCategory[];
+  /** Alert states of the target node to keep. */
+  alertStates?: NodeAlertState[];
+  /** Lowest severity a node's open alerts must reach to match. */
+  minAlertSeverity?: AlertSeverity;
   zone?: string;
   search?: string;
   manualOnly?: boolean;
@@ -662,6 +706,9 @@ function buildCommandQuery(query: CommandQuery, extra: Record<string, unknown> =
     statuses: query.statuses,
     origins: query.origins,
     commandTypes: query.commandTypes,
+    operationCategories: query.operationCategories,
+    alertStates: query.alertStates,
+    minAlertSeverity: query.minAlertSeverity,
     zone: query.zone,
     search: query.search,
     manualOnly: query.manualOnly,

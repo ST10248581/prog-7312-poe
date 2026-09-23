@@ -1,4 +1,5 @@
 import { formatDateTime, humanise } from "../../utils/format";
+import NodeAlertBadge from "./NodeAlertBadge";
 import type { CommandRecord } from "./types";
 
 interface CommandHistoryTableProps {
@@ -39,6 +40,7 @@ function CommandHistoryTable({
             <tr>
               <th>Issued</th>
               <th>Node</th>
+              <th>Category</th>
               <th>Command</th>
               <th>Parameters</th>
               <th>Origin</th>
@@ -56,7 +58,17 @@ function CommandHistoryTable({
                 className={command.status === "Failed" ? "row-anomaly" : undefined}
               >
                 <td className="mono">{formatDateTime(command.issuedUtc)}</td>
-                <td className="mono">{command.nodeId}</td>
+                <td className="mono">
+                  {command.nodeId}
+                  <NodeAlertBadge command={command} />
+                </td>
+                <td>
+                  <span
+                    className={`command-category category-${command.operationCategory.toLowerCase()}`}
+                  >
+                    {command.operationCategory}
+                  </span>
+                </td>
                 <td>{humanise(command.commandType)}</td>
                 <td className="mono">
                   {command.parameters}

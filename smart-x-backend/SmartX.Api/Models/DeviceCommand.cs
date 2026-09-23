@@ -17,6 +17,13 @@ public class DeviceCommand
 
     public CommandType CommandType { get; set; }
 
+    /// <summary>
+    /// Derived from <see cref="CommandType"/> rather than stored, so the two can
+    /// never disagree. Serialised with the command so the dashboard can group
+    /// and label by category without repeating the mapping.
+    /// </summary>
+    public OperationCategory OperationCategory => CommandOperations.CategoryOf(CommandType);
+
     /// <summary>Free-form and rendered as-is, e.g. <c>temp.max=28.5</c>.</summary>
     public string Parameters { get; set; } = string.Empty;
 
@@ -36,4 +43,31 @@ public class DeviceCommand
 
     /// <summary>A dry run is validated and logged but never reaches the node.</summary>
     public bool IsDryRun { get; set; }
+
+    /* ---------- Alert context ----------
+       Not part of the command: the worst alert standing against the target node
+       at the moment of the request. Filled in on the copy the query returns, so
+       the stored log stays a record of what was dispatched. */
+
+    public NodeAlertState NodeAlertState { get; set; }
+
+    /// <summary>Severity of the worst open alert on the node; null when there is none.</summary>
+    public AlertSeverity? NodeAlertSeverity { get; set; }
+
+    /// <summary>Alerts on the node still awaiting resolution.</summary>
+    public int NodeOpenAlertCount { get; set; }
+
+    /// <summary>
+    /// A copy carrying the node's alert context. The query decorates copies
+    /// rather than the stored commands because the dispatch simulator is
+    /// mutating those on a background timer while requests are reading them.
+    /// </summary>
+    public DeviceCommand WithAlertContext(NodeAlertState state, AlertSeverity? severity, int openAlertCount)
+    {
+        var copy = (DeviceCommand)MemberwiseClone();
+        copy.NodeAlertState = state;
+        copy.NodeAlertSeverity = severity;
+        copy.NodeOpenAlertCount = openAlertCount;
+        return copy;
+    }
 }

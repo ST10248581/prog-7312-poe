@@ -32,6 +32,18 @@ public class CommandSummary
 
     public int TotalCount { get; set; }
 
+    /// <summary>Commands in the slice aimed at a node with an unacknowledged alert.</summary>
+    public int AlertingCommandCount { get; set; }
+
+    /// <summary>Distinct nodes behind <see cref="AlertingCommandCount"/>.</summary>
+    public int AlertingNodeCount { get; set; }
+
+    /// <summary>
+    /// How the slice splits across the operation categories, keyed by category
+    /// name. Sent as a map so a new category needs no response-shape change.
+    /// </summary>
+    public Dictionary<string, int> CategoryCounts { get; set; } = new();
+
     /// <summary>Commands per bucket across the window, oldest first.</summary>
     public List<int> Throughput { get; set; } = new();
 
