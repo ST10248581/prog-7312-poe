@@ -75,6 +75,7 @@ export const COMMAND_STATUSES: CommandStatus[] = [
   "Acknowledged",
   "Failed",
   "Expired",
+  "Cancelled",
 ];
 
 export const COMMAND_ORIGINS: CommandOrigin[] = ["Automation", "Manual", "Schedule"];

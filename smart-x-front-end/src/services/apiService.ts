@@ -352,7 +352,14 @@ export interface IngestTelemetryRequest {
 
 /* ---------- Command stream types ---------- */
 
-export type CommandStatus = "Queued" | "Sent" | "Acknowledged" | "Failed" | "Expired";
+export type CommandStatus =
+  | "Queued"
+  | "Sent"
+  | "Acknowledged"
+  | "Failed"
+  | "Expired"
+  /** Withdrawn by an undo before it left the queue. */
+  | "Cancelled";
 
 export type CommandOrigin = "Automation" | "Manual" | "Schedule";
 
@@ -452,6 +459,8 @@ export interface CommandFilterOptions {
   alertSeverities: AlertSeverity[];
   /** Node ids that can be targeted by a manual override. */
   nodes: string[];
+  /** Command types each targetable node accepts, keyed by node id. */
+  nodeCapabilities: Record<string, CommandType[]>;
 }
 
 /**
@@ -482,6 +491,194 @@ export interface DispatchCommandRequest {
   dryRun: boolean;
   issuedBy?: string;
 }
+
+/* ---------- Command engine: undo stack ---------- */
+
+export type UndoOutcome = "Cancelled" | "Reverted" | "Irreversible";
+
+/** One manual override on the API's undo stack. */
+export interface OverrideHistoryEntry {
+  commandId: string;
+  nodeId: string;
+  sensorName: string;
+  commandType: CommandType;
+  parameters: string;
+  priority: CommandPriority;
+  issuedBy: string;
+  issuedUtc: string;
+  /** The compensating command; null when the override has no inverse. */
+  revertCommandType: CommandType | null;
+  revertParameters: string | null;
+  /** What undo will do, in words. */
+  undoDescription: string;
+  /** Current status of the original command. */
+  status: CommandStatus | null;
+}
+
+export interface UndoResult {
+  outcome: UndoOutcome;
+  message: string;
+  undone: OverrideHistoryEntry;
+  revertCommand: DeviceCommand | null;
+  remainingDepth: number;
+}
+
+/* ---------- Command engine: telemetry intake ---------- */
+
+export type PacketLane = "Standard" | "Critical";
+export type BreachDirection = "Low" | "High";
+
+export interface StreamAlert {
+  id: string;
+  nodeId: string;
+  sensorName: string;
+  zone: string;
+  alertType: AlertType;
+  readingType: ReadingType | null;
+  value: number | null;
+  limit: number | null;
+  unit: string;
+  severity: AlertSeverity;
+  lane: PacketLane;
+  message: string;
+  receivedUtc: string;
+  processedUtc: string;
+  queueWaitMs: number;
+  autoCommandId: string | null;
+  autoCommandSummary: string | null;
+}
+
+export interface DisconnectedNode {
+  nodeId: string;
+  sensorName: string;
+  zone: string;
+  sinceUtc: string | null;
+}
+
+export interface ActiveErrorState {
+  nodeId: string;
+  alertType: AlertType;
+  readingType: ReadingType | null;
+  direction: BreachDirection | null;
+  severity: AlertSeverity;
+  sinceUtc: string;
+}
+
+export interface PipelineStatus {
+  standardQueueDepth: number;
+  criticalQueueDepth: number;
+  totalReceived: number;
+  standardProcessed: number;
+  criticalProcessed: number;
+  /** Repeats the error-state and disconnected sets recognised and dropped. */
+  duplicatesSuppressed: number;
+  dropped: number;
+  averageStandardWaitMs: number;
+  averageCriticalWaitMs: number;
+  registeredDevices: number;
+  undoDepth: number;
+  disconnectedNodes: DisconnectedNode[];
+  errorStates: ActiveErrorState[];
+  /** Newest first. */
+  recentAlerts: StreamAlert[];
+  generatedUtc: string;
+}
+
+export interface StreamPacketRequest {
+  nodeId?: string;
+  macAddress?: string;
+  readingType: ReadingType;
+  value?: number | null;
+  timestampUtc?: string;
+  linkUp?: boolean;
+}
+
+export interface PacketIntakeResult {
+  received: number;
+  queuedStandard: number;
+  processedCritical: number;
+  suppressedDuplicates: number;
+  rejected: string[];
+  standardQueueDepth: number;
+  criticalAlerts: StreamAlert[];
+}
+
+/* ---------- Command engine: node timeline ---------- */
+
+export type SensorLogKind =
+  | "Reading"
+  | "Command"
+  | "Alert"
+  | "Recovered"
+  | "Disconnected"
+  | "Reconnected";
+
+export interface SensorLogEntry {
+  timestampUtc: string;
+  kind: SensorLogKind;
+  readingType: ReadingType | null;
+  value: number | null;
+  label: string;
+  severity: AlertSeverity | null;
+}
+
+export interface TimelineSeries {
+  readingType: ReadingType;
+  unit: string;
+  minThreshold: number | null;
+  maxThreshold: number | null;
+  /** Already in timestamp order and down-sampled by the API. */
+  points: { timestampUtc: string; value: number }[];
+}
+
+export interface NodeTimeline {
+  nodeId: string;
+  sensorName: string;
+  zone: string;
+  windowMinutes: number;
+  fromUtc: string;
+  toUtc: string;
+  logSize: number;
+  isDisconnected: boolean;
+  series: TimelineSeries[];
+  /** Commands, alerts and link changes, oldest first. */
+  events: SensorLogEntry[];
+}
+
+/* ---------- Command engine: suggested actions ---------- */
+
+export type SuggestionKind = "PredictedAction" | "NextStep" | "ProblemDevice";
+
+export interface SuggestedAction {
+  /** Stable across refreshes, so a dismissal survives the next poll. */
+  id: string;
+  kind: SuggestionKind;
+  title: string;
+  reason: string;
+  /** 0–1. */
+  confidence: number;
+  support: number;
+  score: number;
+  nodeId: string | null;
+  sensorName: string | null;
+  searchTerm: string | null;
+  commandType: CommandType | null;
+  parameters: string | null;
+  priority: CommandPriority | null;
+  /** True when the target is unreachable, so the command can only be logged. */
+  dryRun: boolean;
+  signals: string[];
+}
+
+export interface InsightsResponse {
+  suggestions: SuggestedAction[];
+  observedActions: number;
+  learnedAssociations: number;
+  activeTriggers: number;
+  generatedUtc: string;
+}
+
+export type OperatorActivityKind = "Search" | "SelectNode";
 
 /* ---------- Plumbing ---------- */
 
@@ -761,6 +958,73 @@ export async function dispatchCommand(
   return handleResponse<DeviceCommand>(response);
 }
 
+/** The undo stack, most recent override first. */
+export async function getOverrideHistory(): Promise<OverrideHistoryEntry[]> {
+  const response = await fetch(`${API_BASE_URL}/commands/overrides`);
+  return handleResponse<OverrideHistoryEntry[]>(response);
+}
+
+/** Pops the most recent override: cancels it if still queued, otherwise sends its inverse. */
+export async function undoLastOverride(issuedBy = "operator"): Promise<UndoResult> {
+  const response = await fetch(`${API_BASE_URL}/commands/overrides/undo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issuedBy }),
+  });
+  return handleResponse<UndoResult>(response);
+}
+
+export async function getPipelineStatus(): Promise<PipelineStatus> {
+  const response = await fetch(`${API_BASE_URL}/commands/pipeline`);
+  return handleResponse<PipelineStatus>(response);
+}
+
+/** Posts packets to the intake. Critical ones are processed before this resolves. */
+export async function ingestStreamPackets(
+  packets: StreamPacketRequest[]
+): Promise<PacketIntakeResult> {
+  const response = await fetch(`${API_BASE_URL}/commands/packets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(packets),
+  });
+  return handleResponse<PacketIntakeResult>(response);
+}
+
+export async function getNodeTimeline(
+  nodeId: string,
+  minutes = 60,
+  maxPoints = 120
+): Promise<NodeTimeline> {
+  const query = buildQuery({ minutes, maxPoints });
+  const response = await fetch(
+    `${API_BASE_URL}/commands/nodes/${encodeURIComponent(nodeId)}/timeline${query}`
+  );
+  return handleResponse<NodeTimeline>(response);
+}
+
+export async function getInsights(issuedBy = "operator"): Promise<InsightsResponse> {
+  const query = buildQuery({ issuedBy });
+  const response = await fetch(`${API_BASE_URL}/commands/insights${query}`);
+  return handleResponse<InsightsResponse>(response);
+}
+
+/**
+ * Tells the action engine what the operator just did, so it can learn habits.
+ * Fire-and-forget: a failure here must never get in the operator's way.
+ */
+export async function recordActivity(
+  kind: OperatorActivityKind,
+  value: string,
+  issuedBy = "operator"
+): Promise<void> {
+  await fetch(`${API_BASE_URL}/commands/activity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, value, issuedBy }),
+  }).catch(() => undefined);
+}
+
 export default {
   testConnection,
   getSummary,
@@ -785,4 +1049,11 @@ export default {
   getCommandSummary,
   getCommandFilterOptions,
   dispatchCommand,
+  getOverrideHistory,
+  undoLastOverride,
+  getPipelineStatus,
+  ingestStreamPackets,
+  getNodeTimeline,
+  getInsights,
+  recordActivity,
 };

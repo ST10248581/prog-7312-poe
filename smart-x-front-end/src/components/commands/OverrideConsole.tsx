@@ -6,7 +6,24 @@ import type {
   CommandFilterOptions,
   DeviceCommand,
   DispatchCommandRequest,
+  OverrideHistoryEntry,
+  UndoResult,
 } from "../../services/apiService";
+
+/**
+ * A command handed to the console from outside, e.g. a suggested action.
+ * `key` changes per hand-off, so preparing the same suggestion twice still
+ * refills the form.
+ */
+export interface OverrideDraft {
+  key: string;
+  commandType: CommandType;
+  parameters: string;
+  priority: CommandPriority;
+  dryRun: boolean;
+  /** Why the draft is there, shown above the form. */
+  source: string;
+}
 
 interface OverrideConsoleProps {
   /** Straight from `/api/commands/filter-options`; null until it arrives. */
@@ -14,10 +31,18 @@ interface OverrideConsoleProps {
   /** Node id taken from the stream selection; the operator can still change it. */
   targetNode: string;
   pending: CommandRecord[];
+  /** The API's undo stack, most recent first. */
+  history: OverrideHistoryEntry[];
+  draft: OverrideDraft | null;
   onTargetChange: (nodeId: string) => void;
   /** Resolves with the queued command, or rejects with the API's reason. */
   onDispatch: (request: DispatchCommandRequest) => Promise<DeviceCommand>;
+  /** Pops the top of the undo stack. Rejects with the API's reason. */
+  onUndo: () => Promise<UndoResult>;
 }
+
+/** How many undo entries are listed under the one that will be undone. */
+const HISTORY_PREVIEW = 4;
 
 /** Hint text per command so the parameter field is never a blank guess. */
 const PARAMETER_HINTS: Record<CommandType, string> = {
@@ -43,8 +68,11 @@ function OverrideConsole({
   options,
   targetNode,
   pending,
+  history,
+  draft,
   onTargetChange,
   onDispatch,
+  onUndo,
 }: OverrideConsoleProps) {
   const [commandType, setCommandType] = useState<CommandType>("SetThreshold");
   const [parameters, setParameters] = useState("");
@@ -56,9 +84,51 @@ function OverrideConsole({
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<DeviceCommand | null>(null);
 
+  const [undoing, setUndoing] = useState(false);
+  const [undoResult, setUndoResult] = useState<UndoResult | null>(null);
+  const [undoError, setUndoError] = useState<string | null>(null);
+
+  // A new draft fills the form once. Adjusted during render rather than in an
+  // effect, so the form never paints a frame with the old values. The
+  // confirmation tick is cleared: a suggestion still has to be checked.
+  const [appliedDraft, setAppliedDraft] = useState<string | null>(null);
+  if (draft && draft.key !== appliedDraft) {
+    setAppliedDraft(draft.key);
+    setCommandType(draft.commandType);
+    setParameters(draft.parameters);
+    setPriority(draft.priority);
+    setDryRun(draft.dryRun);
+    setConfirmed(false);
+    setError(null);
+    setSent(null);
+  }
+
   const nodes = options?.nodes ?? [];
   const priorities = options?.priorities ?? COMMAND_PRIORITIES;
-  const commandTypes = options?.commandTypes ?? COMMAND_TYPES;
+
+  // Only the commands the target's hardware accepts, so the API's capability
+  // check is something the operator never has to run into.
+  const capable = targetNode ? options?.nodeCapabilities?.[targetNode] : undefined;
+  const commandTypes = capable ?? options?.commandTypes ?? COMMAND_TYPES;
+  if (capable && capable.length > 0 && !capable.includes(commandType)) {
+    setCommandType(capable[0]);
+  }
+
+  const handleUndo = async () => {
+    setUndoing(true);
+    setUndoError(null);
+    setUndoResult(null);
+
+    try {
+      setUndoResult(await onUndo());
+    } catch (err) {
+      setUndoError(err instanceof Error ? err.message : "Undo failed.");
+    } finally {
+      setUndoing(false);
+    }
+  };
+
+  const [top, ...older] = history;
 
   const ready = targetNode !== "" && parameters.trim() !== "" && confirmed && !sending;
 
@@ -111,6 +181,13 @@ function OverrideConsole({
         Overrides are logged against your operator id and appear in the stream
         alongside automated traffic.
       </p>
+
+      {draft && draft.key === appliedDraft && (
+        <p className="override-draft" role="status">
+          <strong>Prepared from a suggestion.</strong> {draft.source} Check it and confirm
+          below before it is sent.
+        </p>
+      )}
 
       <form className="override-form" onSubmit={handleSubmit}>
         <label className="override-field">
@@ -254,6 +331,82 @@ function OverrideConsole({
           </p>
         )}
       </form>
+
+      {/* The undo stack. Undo always acts on the top entry, the most recent
+          override, and the API says in advance what undoing it will do. */}
+      <div className="override-undo">
+        <h3 className="override-pending-title">
+          Undo history <span className="override-undo-depth">{history.length}</span>
+        </h3>
+
+        {top ? (
+          <>
+            <div className="override-undo-top">
+              <div className="override-undo-what">
+                <span className="override-pending-node">{top.nodeId}</span>
+                <span className="override-pending-type">
+                  {humanise(top.commandType)} <code>{top.parameters}</code>
+                </span>
+                {top.status && (
+                  <span className={`command-status cmd-status-${top.status.toLowerCase()}`}>
+                    {top.status}
+                  </span>
+                )}
+              </div>
+              <p className="override-undo-plan">
+                Undo will{" "}
+                {top.status === "Queued"
+                  ? "cancel it before it leaves the queue."
+                  : `${top.undoDescription.charAt(0).toLowerCase()}${top.undoDescription.slice(1)}.`}
+              </p>
+              <button
+                type="button"
+                className="override-btn override-btn-undo"
+                onClick={handleUndo}
+                disabled={undoing}
+              >
+                {undoing ? "Undoing…" : "Undo last override"}
+              </button>
+            </div>
+
+            {older.length > 0 && (
+              <ul className="override-undo-list">
+                {older.slice(0, HISTORY_PREVIEW).map((entry) => (
+                  <li key={entry.commandId} className="override-undo-item">
+                    <span className="override-pending-node">{entry.nodeId}</span>
+                    <span className="override-pending-type">{humanise(entry.commandType)}</span>
+                    <span className="override-pending-age">{formatRelative(entry.issuedUtc)}</span>
+                  </li>
+                ))}
+                {older.length > HISTORY_PREVIEW && (
+                  <li className="override-undo-more">+{older.length - HISTORY_PREVIEW} older</li>
+                )}
+              </ul>
+            )}
+          </>
+        ) : (
+          <p className="panel-empty">
+            No overrides to undo. Every live (non-dry-run) override you queue is stacked here.
+          </p>
+        )}
+
+        {undoError && (
+          <p className="override-result override-result-error" role="alert">
+            <strong>Not undone.</strong> {undoError}
+          </p>
+        )}
+
+        {undoResult && !undoError && (
+          <p
+            className={`override-result ${
+              undoResult.outcome === "Irreversible" ? "override-result-error" : "override-result-ok"
+            }`}
+            role="status"
+          >
+            <strong>{undoResult.outcome}.</strong> {undoResult.message}
+          </p>
+        )}
+      </div>
 
       <div className="override-pending">
         <h3 className="override-pending-title">In flight</h3>

@@ -85,7 +85,10 @@ public enum CommandStatus
     Sent,
     Acknowledged,
     Failed,
-    Expired
+    Expired,
+
+    /// <summary>Withdrawn by an undo before it left the queue; never reached the node.</summary>
+    Cancelled
 }
 
 public enum CommandPriority

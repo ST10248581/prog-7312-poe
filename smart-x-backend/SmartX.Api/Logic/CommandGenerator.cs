@@ -48,6 +48,19 @@ public static class CommandGenerator
             [CommandType.RestartNode, CommandType.FirmwarePush, CommandType.RequestSample]
     };
 
+    /// <summary>The command types a node of this category accepts.</summary>
+    public static IReadOnlyList<CommandType> SupportedCommands(SensorCategory category)
+    {
+        return CommandsByCategory.TryGetValue(category, out var types)
+            ? types
+            : Enum.GetValues<CommandType>();
+    }
+
+    public static bool Supports(SensorCategory category, CommandType commandType)
+    {
+        return SupportedCommands(category).Contains(commandType);
+    }
+
     /// <summary>A newly issued command, still queued and not yet dispatched.</summary>
     public static DeviceCommand Compose(Random random, SensorProfile sensor, DateTime issuedUtc)
     {

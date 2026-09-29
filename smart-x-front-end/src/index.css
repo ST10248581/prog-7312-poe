@@ -162,7 +162,8 @@ code {
     position: static;
   }
 
-  .commands-page .commands-grid {
+  .commands-page .commands-grid,
+  .commands-page .insights-grid {
     grid-template-columns: 1fr;
   }
 

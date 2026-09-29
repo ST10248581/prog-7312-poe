@@ -27,11 +27,13 @@ builder.Services.AddScoped<ISensorProfileRepository, SensorProfileRepository>();
 builder.Services.AddScoped<ITelemetryRepository, TelemetryRepository>();
 builder.Services.AddScoped<IAlertRepository, AlertRepository>();
 builder.Services.AddScoped<IEngagementRepository, EngagementRepository>();
-builder.Services.AddScoped<ICommandRepository, CommandRepository>();
 
-// The command stream is its own domain rather than part of the telemetry engine:
-// it has no overlap with the ingest pipeline beyond the sensor profiles it targets.
-builder.Services.AddScoped<ICommandService, CommandService>();
+// The command stream page has its own central engine. It is a singleton, not
+// scoped: its queues, undo stack, registry, sensor logs and error-state sets are
+// live state that has to survive between requests and be shared with the
+// dispatch loop below.
+builder.Services.AddSingleton<SmartXCommandEngine>();
+builder.Services.AddSingleton<ISmartXCommandEngine>(provider => provider.GetRequiredService<SmartXCommandEngine>());
 
 // One central service backs every domain interface, so the controllers keep
 // depending on a narrow contract while the logic itself lives in one class.

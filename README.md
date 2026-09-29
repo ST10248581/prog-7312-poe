@@ -16,20 +16,26 @@ prog-7312-poe/
 │   └── SmartX.Api/
 │       ├── Controllers/          # Thin API controllers — no business logic
 │       │   ├── AlertsController.cs
+│       │   ├── CommandsController.cs   # Page 2 — command stream, overrides, intake, insights
 │       │   ├── EngagementController.cs
 │       │   ├── MeshController.cs       # Ingestion, load arithmetic, deployment
 │       │   ├── SensorsController.cs
 │       │   ├── TelemetryController.cs
 │       │   └── TestController.cs       # Connectivity check
-│       ├── Logic/                # SmartXTelemetryEngine — the central service class
+│       ├── Logic/                # The two central service classes
 │       │   ├── ISmartXTelemetryEngine.cs
 │       │   ├── ISensorService.cs / ITelemetryService.cs / IAlertService.cs / IEngagementService.cs
-│       │   └── SmartXTelemetryEngine.cs
+│       │   ├── SmartXTelemetryEngine.cs    # Page 1 — telemetry
+│       │   ├── ISmartXCommandEngine.cs
+│       │   ├── SmartXCommandEngine.cs      # Page 2 — command stream (Part 2 data structures)
+│       │   ├── CommandDispatchSimulator.cs # 2 s timer that drives the command engine
+│       │   └── CommandGenerator.cs         # Builds and advances simulated commands
 │       ├── Data/                 # Repositories + in-memory data store
 │       │   └── Seeding/          # Demo-data seeders (one per entity)
 │       ├── Models/               # Entities, requests, responses
 │       │   ├── Requests/         # CreateSensorRequest, IngestTelemetryRequest, ...
 │       │   ├── Responses/        # EcosystemSummary, SensorDetail, LoadComparison, ...
+│       │   ├── Stream/           # StreamPacket, PipelineStatus, NodeTimeline, SuggestedAction, ...
 │       │   └── Telemetry/        # TelemetryPacket<T>, SensorLoad, DeploymentNode
 │       ├── Properties/
 │       │   └── launchSettings.json     # http profile — port 5127
@@ -38,12 +44,14 @@ prog-7312-poe/
 ├── smart-x-front-end/            # React 19 + TypeScript (Vite)
 │   ├── src/
 │   │   ├── pages/                # Route-level pages
-│   │   │   ├── TelemetryPage.tsx       # The dashboard (the implemented route)
-│   │   │   ├── CommandsPage.tsx        # Placeholder (ComingSoon)
+│   │   │   ├── TelemetryPage.tsx       # Page 1 — the telemetry dashboard
+│   │   │   ├── CommandsPage.tsx        # Page 2 — command stream and history
 │   │   │   ├── TopologyPage.tsx        # Placeholder (ComingSoon)
 │   │   │   └── TestPage.tsx            # Standalone API connection check (not routed)
 │   │   ├── components/
 │   │   │   ├── Navbar.tsx, ComingSoon.tsx
+│   │   │   ├── commands/         # Page 2 — CommandStream, OverrideConsole (undo),
+│   │   │   │                     # SuggestedActions, IngestPipeline, NodeTimeline, ...
 │   │   │   └── telemetry/        # Dashboard widgets — SensorCard, LiveChart,
 │   │   │                         # AlertFeed, FilterBar, MeshInsights,
 │   │   │                         # DeploymentTree, TroubleshootingGuide, ...
@@ -114,7 +122,7 @@ both sides must be updated.
 | --- | --- | --- |
 | `/` | — | Redirects to `/telemetry` |
 | `/telemetry` | `TelemetryPage` | Implemented — the dashboard |
-| `/commands` | `CommandsPage` | Placeholder (`ComingSoon`), disabled in the navbar |
+| `/commands` | `CommandsPage` | Implemented — command stream, manual overrides with undo, telemetry intake, suggested actions |
 | `/topology` | `TopologyPage` | Placeholder (`ComingSoon`), disabled in the navbar |
 
 ## API Reference
@@ -144,6 +152,18 @@ is enabled so a gateway can send a lost sample as the string `"NaN"`.
 | `GET` | `/api/mesh/load/compare` | Delta between two meters |
 | `GET` | `/api/mesh/deployment` | Validate the live deployment tree |
 | `POST` | `/api/mesh/deployment/validate` | Validate a proposed configuration profile |
+| `GET` | `/api/commands` | Paged, filtered command history |
+| `GET` | `/api/commands/stream` | Live tail of the command stream |
+| `GET` | `/api/commands/summary` | Dispatch health and throughput |
+| `GET` | `/api/commands/filter-options` | Filter values, targetable nodes and their capabilities |
+| `POST` | `/api/commands` | Queue a manual override |
+| `GET` | `/api/commands/overrides` | The undo stack, most recent first |
+| `POST` | `/api/commands/overrides/undo` | Undo the most recent override |
+| `POST` | `/api/commands/packets` | Telemetry intake (standard queue / critical lane) |
+| `GET` | `/api/commands/pipeline` | Queue depths, error states, disconnected nodes, recent alerts |
+| `GET` | `/api/commands/nodes/{nodeId}/timeline` | A node's sorted log, ready to chart |
+| `GET` | `/api/commands/insights` | Suggested actions and automated insights |
+| `POST` | `/api/commands/activity` | Record a search or node selection for the action engine |
 
 ## Key Features
 
@@ -426,10 +446,84 @@ Example ingest body — three sequential batches of differing length, with one l
 }
 ```
 
+## Part 2 — Command Stream Engine and Data Structures
+
+All logic for the **Real-Time Command Stream and History** page lives in one service:
+
+**`smart-x-backend/SmartX.Api/Logic/SmartXCommandEngine.cs`**
+
+It replaces the `CommandService`, `CommandRepository` and the tick logic that used to
+live in `CommandDispatchSimulator`. The simulator is now only a 2-second timer that
+calls `RunDispatchCycle()`. The engine is registered as a **singleton**, because its
+queues, undo stack, registry, logs and sets are live state shared between requests
+and the dispatch loop. All of that state sits behind one lock (the store's
+`CommandsSyncRoot`), so the command log and the structures built around it are never
+seen half-updated.
+
+### Stacks, queues and priority queues
+
+| Requirement | Structure | Where | What it does |
+| --- | --- | --- | --- |
+| Message queue | `Queue<StreamPacket> _standardLane` | `Enqueue`, `DrainStandardLane` | Routine telemetry packets are processed first in, first out, at a budget of 20 per tick. A gateway burst backs the queue up and it drains over the next ticks. |
+| Priority queue | `PriorityQueue<StreamPacket, (int Rank, long Ticks)> _criticalLane` | `Classify`, `Enqueue`, `DrainCriticalLane` | A packet is classified before it is queued. A severe power spike, a moisture crash (≥ 25 % of the span past the limit, or a threshold marked critical) or a lost link goes to the priority queue, which is drained **immediately**: in the same request for posted packets, and ahead of the FIFO on every tick. The worst breach is dequeued first, with ties in arrival order. |
+| Stack (undo) | `Stack<OverrideHistoryEntry> _overrideHistory` | `Dispatch`, `UndoLastOverride` | Every live manual override is pushed with a revert plan worked out at issue time (the value it replaced). Undo pops the top: a queued command is cancelled; a sent one gets its inverse at Immediate priority (for example, "shut down valves" becomes "open them again", and a threshold or firmware change is restored to the previous value). A restart or a sample request is reported as irreversible. |
+
+### Hash tables, dictionaries and sorted dictionaries
+
+| Requirement | Structure | Where | What it does |
+| --- | --- | --- | --- |
+| Dictionary | `Dictionary<string, SensorProfile>` keyed by **node id** and by **MAC address** (case-insensitive), plus one by profile id | `ResolveDevice`, `Dispatch`, `Process`, `RefreshRegistry` | The live device registry. Every incoming packet and every dispatch resolves its device in O(1). The registry rebuilds itself when page 1 registers a new sensor. |
+| Sorted dictionary | `SortedDictionary<DateTime, SensorLogEntry>` per node | `AppendLog`, `GetNodeTimeline` | Each node's historical log (readings, commands, alerts, link changes) keyed by timestamp. Late packets are slotted into place on insert, so the timeline endpoint reads the log out already in order and down-samples it in one forward pass. Retention trims from the smallest key. |
+
+### Sets
+
+| Requirement | Structure | Where | What it does |
+| --- | --- | --- | --- |
+| Hash set — disconnected nodes | `HashSet<string> _disconnectedNodes` | `Enqueue`, `Process` | A repeated "link lost" packet for a node already in the set is dropped at intake with one hash probe. The node is alerted once, not on every tick of the outage. |
+| Hash set — error states | `HashSet<ErrorStateKey> _activeErrorStates` (a `record struct` of node, alert type and metric) | `Process` | `Add` returning false means the breach is a repeat, so the reading is logged but no second alert is raised. The state clears when the value returns in range. An escalation from Warning to Critical still alerts. |
+
+The **Telemetry intake** panel on page 2 shows both lane depths, average waits, the
+duplicate-suppression count, the two sets, and the recent pipeline alerts. **Simulate
+power spike** posts 20 routine packets followed by one spike, so you can watch the
+spike get processed before the routine packets queued ahead of it.
+
+### Predictive Action and Recommendation Engine
+
+`GetInsights` merges three sources and keeps the best eight with a bounded min-heap
+(`PriorityQueue<SuggestedAction, double>`):
+
+1. **Pattern analysis: association rules** (`RegisterTrigger`, `RecordAction`,
+   `AddRuleSuggestions`). Every condition that starts (a breach entering the
+   error-state set, or a node dropping off) opens a 10-minute association window.
+   Every operator action (a search, a node selection or a manual override) is
+   credited to the conditions still in the window, both for the specific node
+   (*"after ENV-001's humidity drops below its limit, operators searched for
+   'actuator node 03'"*) and as a general rule (*"after any node's power spikes,
+   operators request a sample from it"*). A rule fires when a matching condition is
+   active now, with support ≥ 3 and confidence ≥ 40 % [20]. Conditions that fired
+   while no operator was present don't count against a rule.
+2. **Algorithmic suggestion: next step** (`AddNextStepSuggestions`). A first-order
+   Markov chain over each operator's action sequence. After your last action, it
+   suggests what usually follows it, with P(next | last) ≥ 30 % [21].
+3. **Problem devices** (`AddProblemDeviceSuggestions`). Each node is scored on open
+   breaches, out-of-range readings, failed or expired commands, link flapping and
+   drift (the z-score of the latest reading against a running mean and variance,
+   computed in one pass with Welford's method [22]). High scorers are flagged with
+   the command most likely to help, for example recalibrating a drifting node or
+   rolling a failing beta firmware back to stable.
+
+The engine starts with two days of seeded operator habits. The flaky nodes the
+simulator keeps breaching reproduce those habits, so the rules fire on real
+conditions from the start. Every search, node selection and override on the page
+feeds back in. The **Suggested actions** panel presents each recommendation with
+its reason, confidence and evidence. **Prepare** fills in the override console,
+where the operator still confirms before anything is sent.
+
 ## Code Attributions and Reference List
 
-The four advanced object-oriented C# concepts were implemented with reference to the
-sources listed below. Each source is also cited as a comment in the file(s) where the
+The advanced object-oriented C# concepts (Part 1) and the data structures and
+recommendation engine (Part 2) were implemented with reference to the sources
+listed below. Each source is also cited as a comment in the file(s) where the
 technique is used, using the same reference number as this list.
 
 ### Reference list
@@ -489,6 +583,46 @@ technique is used, using the same reference number as this list.
     <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer>
     [Accessed 13 September 2026].
 
+**Part 2 — Stacks, queues and priority queues**
+
+14. Microsoft. 2025. *Queue\<T\> Class (System.Collections.Generic)*. [Online]. Available at:
+    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1>
+    [Accessed 29 September 2026].
+15. Microsoft. 2025. *PriorityQueue\<TElement,TPriority\> Class*. [Online]. Available at:
+    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2>
+    [Accessed 29 September 2026].
+16. Microsoft. 2025. *Stack\<T\> Class (System.Collections.Generic)*. [Online]. Available at:
+    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1>
+    [Accessed 29 September 2026].
+
+**Part 2 — Hash tables, dictionaries and sorted dictionaries**
+
+17. Microsoft. 2025. *Dictionary\<TKey,TValue\> Class*. [Online]. Available at:
+    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2>
+    [Accessed 29 September 2026].
+18. Microsoft. 2025. *SortedDictionary\<TKey,TValue\> Class*. [Online]. Available at:
+    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sorteddictionary-2>
+    [Accessed 29 September 2026].
+
+**Part 2 — Sets**
+
+19. Microsoft. 2025. *HashSet\<T\> Class (System.Collections.Generic)*. [Online]. Available at:
+    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1>
+    [Accessed 29 September 2026].
+
+**Part 2 — Predictive action and recommendation engine**
+
+20. Agrawal, R., Imieliński, T. and Swami, A. 1993. Mining association rules between
+    sets of items in large databases. *Proceedings of the 1993 ACM SIGMOD International
+    Conference on Management of Data*, pp. 207–216. Available at:
+    <https://doi.org/10.1145/170035.170072> [Accessed 29 September 2026].
+21. Jurafsky, D. and Martin, J.H. 2025. *Speech and Language Processing* (3rd ed. draft),
+    ch. 3 "N-gram Language Models". [Online]. Available at:
+    <https://web.stanford.edu/~jurafsky/slp3/> [Accessed 29 September 2026].
+22. Welford, B.P. 1962. Note on a method for calculating corrected sums of squares and
+    products. *Technometrics*, 4(3), pp. 419–420. Available at:
+    <https://doi.org/10.1080/00401706.1962.10490022> [Accessed 29 September 2026].
+
 ### Where each reference is cited in the code
 
 All paths are relative to `smart-x-backend/SmartX.Api/`.
@@ -500,6 +634,7 @@ All paths are relative to `smart-x-backend/SmartX.Api/`.
 | `Models/Requests/IngestTelemetryRequest.cs` | 9 | The `double[][]` jagged array carrying ragged gateway batches |
 | `Models/Telemetry/DeploymentNode.cs` | 12 | The self-referencing node shape (a node holding a list of nodes) that makes the validation walk recursive |
 | `Logic/SmartXTelemetryEngine.cs` | 1, 3, 5, 6, 9, 10, 11, 12, 13 | Header block lists all; section comments cite 9/10/11 (+1, 3) on `IngestHistoricalBatches` and `ProjectStatistics`, 5/6 on `GetAggregateLoad` / `CompareLoad`, and 12/13 on `ValidateDeployment` / `ValidateNode` |
+| `Logic/SmartXCommandEngine.cs` | 14–22 | Header block lists all; field and section comments cite 14/15 on the two intake lanes, 16 on the undo stack, 17 on the registry dictionaries, 18 on the sorted sensor logs, 19 on the disconnected-node and error-state sets, 20 on `AddRuleSuggestions`, 21 on `AddNextStepSuggestions`, and 22 on `RunningStats` / `AddProblemDeviceSuggestions` |
 
 ## Research Focus
 
@@ -516,16 +651,17 @@ The following strategies were considered:
 
 ## Status
 
-**Academic Project — Part 1 implemented**
+**Academic Project — Parts 1 and 2 implemented**
 
 The dashboard concept developed from the accompanying research is implemented and
 running end to end:
 
-* **Backend** — complete for the scope above: six controllers over a central
-  `SmartXTelemetryEngine`, backed by an in-memory store seeded at startup. All four
-  required advanced C# concepts are exercised by live endpoints.
-* **Frontend** — the `/telemetry` dashboard is built and consumes the API. `/commands`
-  and `/topology` are deliberate `ComingSoon` placeholders, disabled in the navbar.
+* **Backend** — seven controllers over two central engines, backed by an in-memory
+  store seeded at startup. `SmartXTelemetryEngine` exercises the four Part 1 C#
+  concepts; `SmartXCommandEngine` exercises the Part 2 data structures and the
+  recommendation engine.
+* **Frontend** — `/telemetry` and `/commands` are built and consume the API.
+  `/topology` is a deliberate `ComingSoon` placeholder, disabled in the navbar.
 
 Known gaps, recorded rather than hidden:
 

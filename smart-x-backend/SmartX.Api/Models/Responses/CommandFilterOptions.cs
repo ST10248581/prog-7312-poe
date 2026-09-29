@@ -26,6 +26,12 @@ public class CommandFilterOptions
 
     /// <summary>Node ids that can be targeted by a manual override.</summary>
     public List<string> Nodes { get; set; } = new();
+
+    /// <summary>
+    /// The command types each targetable node accepts, keyed by node id, so the
+    /// console only offers commands the API will not reject for the hardware.
+    /// </summary>
+    public Dictionary<string, List<string>> NodeCapabilities { get; set; } = new();
 }
 
 /// <summary>One operation category and the command types it groups.</summary>
