@@ -27,6 +27,13 @@ public class CommandQuery
     /// <summary>Lowest alert severity a node's open alerts must reach to match.</summary>
     public AlertSeverity? MinAlertSeverity { get; set; }
 
+    /// <summary>
+    /// Operational categories of the target device — Environmental,
+    /// PowerConsumption and so on. The same facet the live device panel filters
+    /// by, so narrowing to a category narrows the devices and their traffic together.
+    /// </summary>
+    public List<SensorCategory>? SensorCategories { get; set; }
+
     public string? Zone { get; set; }
 
     /// <summary>Matched against node id and sensor name, case-insensitively.</summary>

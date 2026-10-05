@@ -3,8 +3,9 @@ namespace SmartX.Api.Logic;
 /// <summary>
 /// The clock for the command stream. Every two seconds it asks the
 /// <see cref="ISmartXCommandEngine"/> to run one dispatch cycle — advance
-/// in-flight commands, issue automated traffic, take in gateway packets and
-/// drain the intake queues.
+/// in-flight commands, issue automated traffic and drain the intake queues.
+/// Telemetry itself arrives separately, over HTTP, from
+/// <see cref="DeviceTelemetrySimulator"/>.
 /// <para>
 /// This is what makes the page genuinely real-time rather than a polled
 /// snapshot of a frozen list. The logic itself lives in the engine; this class

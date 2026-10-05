@@ -116,6 +116,9 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     private const int MaxLogEntriesPerNode = 4_000;
     private const int MaxTimelineEvents = 80;
 
+    /// <summary>Values kept per node and metric for the live panel's sparklines.</summary>
+    private const int RecentReadingDepth = 24;
+
     /* ---------- Undo ---------- */
 
     private const int MaxUndoDepth = 50;
@@ -230,6 +233,13 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     /* ---------- Sorted sensor logs [18] ---------- */
 
     private readonly Dictionary<string, SortedDictionary<DateTime, SensorLogEntry>> _sensorLogs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The last few values per node and metric — a bounded Queue&lt;T&gt; [14]
+    /// behind a Dictionary [17] — so the live device panel reads every device's
+    /// latest readings in O(1) each instead of walking its full sorted log.
+    /// </summary>
+    private readonly Dictionary<(string NodeId, ReadingType Type), Queue<TimelinePoint>> _recentReadings = new();
 
     /* ---------- Sets [19] ---------- */
 
@@ -416,6 +426,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 .ToList(),
             AlertStates = Enum.GetNames<NodeAlertState>().ToList(),
             AlertSeverities = Enum.GetNames<AlertSeverity>().ToList(),
+            SensorCategories = Enum.GetNames<SensorCategory>().ToList(),
             Zones = zones,
             Nodes = targets.Select(sensor => sensor.NodeId).ToList(),
             NodeCapabilities = targets.ToDictionary(
@@ -437,10 +448,15 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
         List<DeviceCommand> commands;
         Dictionary<Guid, NodeAlertContext> liveContexts;
+        Dictionary<Guid, SensorCategory> categories;
 
         lock (_sync)
         {
             EnsureReady();
+
+            // A command carries its node, not the node's category; this copy of
+            // the registry answers that per command in O(1) once the lock is released.
+            categories = _devicesById.ToDictionary(pair => pair.Key, pair => pair.Value.Category);
 
             // The log is kept in issue order, so the window is a suffix of it:
             // walk back from the newest and stop at the first command older
@@ -511,6 +527,13 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 command.NodeAlertSeverity.Value >= query.MinAlertSeverity.Value);
         }
 
+        if (query.SensorCategories is { Count: > 0 })
+        {
+            matches = matches.Where(command =>
+                categories.TryGetValue(command.SensorProfileId, out var category) &&
+                query.SensorCategories.Contains(category));
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Zone))
         {
             matches = matches.Where(command =>
@@ -537,7 +560,9 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 MatchesLabel(command.CommandType.ToString(), term) ||
                 MatchesLabel(command.OperationCategory.ToString(), term) ||
                 MatchesLabel(command.Status.ToString(), term) ||
-                MatchesLabel(command.Origin.ToString(), term));
+                MatchesLabel(command.Origin.ToString(), term) ||
+                (categories.TryGetValue(command.SensorProfileId, out var category) &&
+                 MatchesLabel(category.ToString(), term)));
         }
 
         return matches.OrderByDescending(command => command.IssuedUtc).ToList();
@@ -1654,6 +1679,156 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     }
 
     /// <summary>
+    /// The live device panel: every registered device that matches, each with
+    /// its latest value per metric and a short trail behind it. The registry is
+    /// small enough (tens of nodes, not thousands) that all matches are returned
+    /// in one response, so the panel shows the whole fleet rather than a page of it.
+    /// </summary>
+    public LiveDeviceResult GetLiveDevices(DeviceQuery query)
+    {
+        var now = DateTime.UtcNow;
+        var devices = new List<LiveDevice>();
+        var sensorIds = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<Guid, NodeAlertContext> liveContexts;
+
+        lock (_sync)
+        {
+            EnsureReady();
+            liveContexts = BuildLiveAlertContexts();
+
+            foreach (var device in _devicesById.Values)
+            {
+                var readings = new List<LiveReading>();
+                DateTime? lastReading = null;
+
+                foreach (var readingType in ReadingTypeProfile.ForCategory(device.Category))
+                {
+                    var limits = Limits(device.Id, readingType);
+                    var reading = new LiveReading
+                    {
+                        ReadingType = readingType,
+                        Unit = ReadingTypeProfile.For(readingType).Unit,
+                        MinThreshold = limits.IsBoolean ? null : limits.Min,
+                        MaxThreshold = limits.IsBoolean ? null : limits.Max,
+                        IsBoolean = limits.IsBoolean
+                    };
+
+                    // One hash probe for the node's window on this metric.
+                    if (_recentReadings.TryGetValue((device.NodeId, readingType), out var recent) && recent.Count > 0)
+                    {
+                        var latest = recent.Last();
+                        reading.Value = latest.Value;
+                        reading.TimestampUtc = latest.TimestampUtc;
+                        reading.OutOfRange = !limits.IsBoolean && (latest.Value < limits.Min || latest.Value > limits.Max);
+                        reading.Recent = recent.Select(point => point.Value).ToList();
+
+                        if (lastReading is null || latest.TimestampUtc > lastReading)
+                        {
+                            lastReading = latest.TimestampUtc;
+                        }
+                    }
+
+                    readings.Add(reading);
+                }
+
+                sensorIds[device.NodeId] = device.Id;
+                devices.Add(new LiveDevice
+                {
+                    NodeId = device.NodeId,
+                    SensorName = device.Name,
+                    MacAddress = device.MacAddress,
+                    Category = device.Category,
+                    Zone = device.Zone,
+                    Room = device.Room,
+                    IsDisconnected = !IsReachable(device),
+                    LastReadingUtc = lastReading,
+                    Readings = readings
+                });
+            }
+        }
+
+        // Same alert picture the command filter uses, so a device and the
+        // commands sent to it can never disagree about whether it is alerting.
+        var alertContexts = BuildAlertContexts(liveContexts);
+        foreach (var device in devices)
+        {
+            var context = sensorIds.TryGetValue(device.NodeId, out var id) && alertContexts.TryGetValue(id, out var found)
+                ? found
+                : NodeAlertContext.None;
+
+            device.AlertState = context.State;
+            device.AlertSeverity = context.Severity;
+            device.OpenAlertCount = context.OpenCount;
+        }
+
+        // Each facet is counted with every other filter applied but its own, so
+        // a category chip says how many devices selecting it would bring in.
+        var forCategoryCounts = devices.Where(device => MatchesDevice(device, query, skipCategories: true, skipAlertStates: false)).ToList();
+        var forAlertCounts = devices.Where(device => MatchesDevice(device, query, skipCategories: false, skipAlertStates: true)).ToList();
+
+        var matches = devices
+            .Where(device => MatchesDevice(device, query, skipCategories: false, skipAlertStates: false))
+            // Worst first: the device most in need of an override leads.
+            .OrderByDescending(device => device.AlertState)
+            .ThenByDescending(device => device.AlertSeverity ?? (AlertSeverity)(-1))
+            .ThenByDescending(device => device.IsDisconnected)
+            .ThenBy(device => device.NodeId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new LiveDeviceResult
+        {
+            Items = matches,
+            TotalRegistered = devices.Count,
+            CategoryCounts = Enum.GetValues<SensorCategory>().ToDictionary(
+                category => category.ToString(),
+                category => forCategoryCounts.Count(device => device.Category == category)),
+            AlertStateCounts = Enum.GetValues<NodeAlertState>().ToDictionary(
+                state => state.ToString(),
+                state => forAlertCounts.Count(device => device.AlertState == state)),
+            GeneratedUtc = now
+        };
+    }
+
+    private static bool MatchesDevice(LiveDevice device, DeviceQuery query, bool skipCategories, bool skipAlertStates)
+    {
+        if (!skipCategories && query.SensorCategories is { Count: > 0 } && !query.SensorCategories.Contains(device.Category))
+        {
+            return false;
+        }
+
+        if (!skipAlertStates && query.AlertStates is { Count: > 0 } && !query.AlertStates.Contains(device.AlertState))
+        {
+            return false;
+        }
+
+        if (query.MinAlertSeverity.HasValue &&
+            (!device.AlertSeverity.HasValue || device.AlertSeverity.Value < query.MinAlertSeverity.Value))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Zone) &&
+            !string.Equals(device.Zone, query.Zone, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(query.Search))
+        {
+            return true;
+        }
+
+        var term = query.Search.Trim();
+        return device.NodeId.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+               device.SensorName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+               device.Zone.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+               device.Room.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+               device.MacAddress.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+               MatchesLabel(device.Category.ToString(), term) ||
+               MatchesLabel(device.AlertState.ToString(), term);
+    }
+
+    /// <summary>
     /// Adds an entry to a node's sorted log. Two entries can share a timestamp
     /// (a gateway flushes several metrics at once), so a collision is nudged
     /// forward a tick rather than overwriting. Caller holds the lock.
@@ -1673,6 +1848,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         }
 
         log.Add(key, entry);
+        TrackRecent(nodeId, entry);
 
         // The smallest key is the oldest entry, so retention trims from the front.
         var cutoff = DateTime.UtcNow.AddHours(-LogRetentionHours);
@@ -1685,6 +1861,56 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             }
 
             log.Remove(oldest);
+        }
+    }
+
+    /// <summary>
+    /// Pushes a reading onto its node and metric's recent window, dropping the
+    /// oldest once the window is full. A packet that arrives late belongs in the
+    /// sorted log but not at the end of a "latest" trail, so it is skipped here.
+    /// Caller holds the lock.
+    /// </summary>
+    private void TrackRecent(string nodeId, SensorLogEntry entry)
+    {
+        if (entry.Kind != SensorLogKind.Reading || entry.ReadingType is not ReadingType readingType || entry.Value is not double value)
+        {
+            return;
+        }
+
+        var key = (nodeId, readingType);
+        if (!_recentReadings.TryGetValue(key, out var recent))
+        {
+            recent = new Queue<TimelinePoint>(RecentReadingDepth + 1);
+            _recentReadings[key] = recent;
+        }
+        else if (recent.Count > 0 && recent.Last().TimestampUtc > entry.TimestampUtc)
+        {
+            return;
+        }
+
+        recent.Enqueue(new TimelinePoint { TimestampUtc = entry.TimestampUtc, Value = value });
+        while (recent.Count > RecentReadingDepth)
+        {
+            recent.Dequeue();
+        }
+    }
+
+    /// <summary>
+    /// Refills every recent window from the sorted logs. Run once after the
+    /// start-up back-fill, which arrives in seed order rather than time order:
+    /// each log already iterates oldest first, so this is one forward pass per
+    /// node with no sort. Caller holds the lock.
+    /// </summary>
+    private void RebuildRecentReadings()
+    {
+        _recentReadings.Clear();
+
+        foreach (var (nodeId, log) in _sensorLogs)
+        {
+            foreach (var entry in log.Values)
+            {
+                TrackRecent(nodeId, entry);
+            }
         }
     }
 
@@ -1753,8 +1979,10 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
             AdvanceInFlight(now);
             IssueAutomatedTraffic(now);
-            GenerateGatewayTraffic(now);
 
+            // Telemetry is not generated here: it arrives over HTTP from the
+            // device simulator, through the same intake endpoint a real device
+            // posts to. This tick only drains what has arrived since the last.
             // Critical first, always; then the routine queue, as far as the
             // budget allows. A burst backs the FIFO up and it drains over the
             // following ticks, while critical packets never wait.
@@ -1807,63 +2035,106 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         return _random.NextDouble() < CommandsPerTick ? 1 : 0;
     }
 
+    // =====================================================================
+    // Device emulation
+    // =====================================================================
+
     /// <summary>
-    /// Stands in for the mesh gateways: a handful of nodes report each tick,
-    /// the flaky ones more often and with sustained excursions, and now and then
-    /// a gateway flushes a backlog in one burst.
+    /// Stands in for the mesh: a handful of devices report each tick, the flaky
+    /// ones more often and with sustained excursions, a gateway reports nodes
+    /// it has lost, and now and then a gateway flushes a backlog in one burst.
+    /// <para>
+    /// This only composes what each device would say. None of it enters the
+    /// intake from here — <see cref="DeviceTelemetrySimulator"/> posts every
+    /// transmission to <c>POST /api/commands/packets</c>, so emulated traffic
+    /// takes exactly the path a real ESP32 would.
+    /// </para>
     /// </summary>
-    private void GenerateGatewayTraffic(DateTime now)
+    public IReadOnlyList<DeviceTransmission> ComposeDeviceTransmissions()
     {
-        var reachable = _devicesById.Values.Where(IsReachable).ToList();
-        if (reachable.Count == 0)
-        {
-            return;
-        }
+        var now = DateTime.UtcNow;
+        var transmissions = new List<DeviceTransmission>();
 
-        var reporting = new HashSet<Guid>();
-
-        foreach (var nodeId in _flakyNodes)
+        lock (_sync)
         {
-            if (!_devicesByNode.TryGetValue(nodeId, out var flaky))
+            EnsureReady();
+
+            var reachable = _devicesById.Values.Where(IsReachable).ToList();
+            if (reachable.Count == 0)
             {
-                continue;
+                return transmissions;
             }
 
-            if (flaky.Category == SensorCategory.Connectivity && StepOutage(flaky, now))
+            var gatewayReports = new List<StreamPacketRequest>();
+            var reporting = new HashSet<Guid>();
+
+            foreach (var nodeId in _flakyNodes)
             {
-                continue;
+                if (!_devicesByNode.TryGetValue(nodeId, out var flaky))
+                {
+                    continue;
+                }
+
+                if (flaky.Category == SensorCategory.Connectivity && StepOutage(flaky, now, gatewayReports))
+                {
+                    continue;
+                }
+
+                if (_random.NextDouble() < 0.5 && IsReachable(flaky))
+                {
+                    reporting.Add(flaky.Id);
+                }
             }
 
-            if (_random.NextDouble() < 0.5 && IsReachable(flaky))
+            var target = Math.Min(reachable.Count, reporting.Count + ReportingNodesPerTick);
+            while (reporting.Count < target)
             {
-                reporting.Add(flaky.Id);
+                reporting.Add(reachable[_random.Next(reachable.Count)].Id);
+            }
+
+            // One request per device, identified by its MAC address the way an
+            // ESP32 announces itself — the intake resolves it through the MAC
+            // dictionary.
+            foreach (var sensorId in reporting)
+            {
+                var device = _devicesById[sensorId];
+                transmissions.Add(new DeviceTransmission
+                {
+                    Sender = device.NodeId,
+                    Packets = ComposeReadings(device, now)
+                });
+            }
+
+            if (gatewayReports.Count > 0)
+            {
+                transmissions.Add(new DeviceTransmission { Sender = "gateway", Packets = gatewayReports });
+            }
+
+            // A gateway flushing its buffer: routine data only, but enough of it
+            // to back the FIFO up past a single tick's budget.
+            if (_random.NextDouble() < 0.05)
+            {
+                var burst = _random.Next(25, 46);
+                var flush = new List<StreamPacketRequest>(burst);
+                for (var index = 0; index < burst; index++)
+                {
+                    var device = reachable[_random.Next(reachable.Count)];
+                    var readingTypes = ReadingTypeProfile.ForCategory(device.Category);
+                    var readingType = readingTypes[_random.Next(readingTypes.Length)];
+                    flush.Add(new StreamPacketRequest
+                    {
+                        NodeId = device.NodeId,
+                        ReadingType = readingType,
+                        Value = RoutineValue(readingType, now),
+                        TimestampUtc = now.AddSeconds(-_random.Next(1, 60))
+                    });
+                }
+
+                transmissions.Add(new DeviceTransmission { Sender = "gateway", Packets = flush });
             }
         }
 
-        var target = Math.Min(reachable.Count, reporting.Count + ReportingNodesPerTick);
-        while (reporting.Count < target)
-        {
-            reporting.Add(reachable[_random.Next(reachable.Count)].Id);
-        }
-
-        foreach (var sensorId in reporting)
-        {
-            EmitReadings(_devicesById[sensorId], now);
-        }
-
-        // A gateway flushing its buffer: routine data only, but enough of it to
-        // back the FIFO up past a single tick's budget.
-        if (_random.NextDouble() < 0.05)
-        {
-            var burst = _random.Next(25, 46);
-            for (var index = 0; index < burst; index++)
-            {
-                var device = reachable[_random.Next(reachable.Count)];
-                var readingTypes = ReadingTypeProfile.ForCategory(device.Category);
-                var readingType = readingTypes[_random.Next(readingTypes.Length)];
-                Enqueue(BuildPacket(device, readingType, RoutineValue(readingType, now), now.AddSeconds(-_random.Next(1, 60)), true, now, "gateway"));
-            }
-        }
+        return transmissions;
     }
 
     /// <summary>
@@ -1871,7 +2142,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     /// reporting the node lost every tick — the duplicates the disconnected set
     /// exists to absorb. Returns true while the node is down.
     /// </summary>
-    private bool StepOutage(SensorProfile device, DateTime now)
+    private bool StepOutage(SensorProfile device, DateTime now, List<StreamPacketRequest> gatewayReports)
     {
         if (_outageTicks.TryGetValue(device.NodeId, out var remaining))
         {
@@ -1882,7 +2153,14 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             }
 
             _outageTicks[device.NodeId] = remaining - 1;
-            Enqueue(BuildPacket(device, ReadingType.Temperature, null, now, linkUp: false, now, "gateway"));
+            gatewayReports.Add(new StreamPacketRequest
+            {
+                NodeId = device.NodeId,
+                ReadingType = ReadingType.Temperature,
+                Value = null,
+                TimestampUtc = now,
+                LinkUp = false
+            });
             return true;
         }
 
@@ -1894,9 +2172,11 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         return false;
     }
 
-    private void EmitReadings(SensorProfile device, DateTime now)
+    /// <summary>One reading per metric the device carries, addressed by its MAC.</summary>
+    private List<StreamPacketRequest> ComposeReadings(SensorProfile device, DateTime now)
     {
         var isFlaky = _flakyNodes.Contains(device.NodeId);
+        var packets = new List<StreamPacketRequest>();
 
         foreach (var readingType in ReadingTypeProfile.ForCategory(device.Category))
         {
@@ -1912,8 +2192,18 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 value = ExcursionValue(device, readingType, isFlaky) ?? RoutineValue(readingType, now);
             }
 
-            Enqueue(BuildPacket(device, readingType, value, now, true, now, "gateway"));
+            packets.Add(new StreamPacketRequest
+            {
+                // Fall back to the node id for a device registered without a MAC.
+                MacAddress = string.IsNullOrWhiteSpace(device.MacAddress) ? null : device.MacAddress,
+                NodeId = string.IsNullOrWhiteSpace(device.MacAddress) ? device.NodeId : null,
+                ReadingType = readingType,
+                Value = Math.Round(value, 3),
+                TimestampUtc = now
+            });
         }
+
+        return packets;
     }
 
     /// <summary>
@@ -2764,6 +3054,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 Value = value
             });
         }
+
+        RebuildRecentReadings();
 
         foreach (var alert in _store.Alerts)
         {

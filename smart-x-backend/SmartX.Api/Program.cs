@@ -61,6 +61,11 @@ builder.Services.AddSingleton<IDataSeeder, DataSeeder>();
 // frozen log.
 builder.Services.AddHostedService<CommandDispatchSimulator>();
 
+// Emulated devices. They post telemetry to POST /api/commands/packets over
+// HTTP, so simulated traffic reaches the intake exactly as a device's would.
+builder.Services.AddHttpClient();
+builder.Services.AddHostedService<DeviceTelemetrySimulator>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>

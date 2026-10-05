@@ -10,12 +10,14 @@ import {
   EMPTY_FILTERS,
   NODE_ALERT_STATES,
   OPERATION_CATEGORIES,
+  SENSOR_CATEGORIES,
+  SENSOR_CATEGORY_HINTS,
   TIME_WINDOWS,
   describeFilters,
   hasActiveFilters,
   removeFilter,
 } from "./types";
-import type { AlertSeverity, CommandFilters, OperationCategory } from "./types";
+import type { AlertSeverity, CommandFilters, OperationCategory, SensorCategory } from "./types";
 import type { CommandFilterOptions } from "../../services/apiService";
 
 /**
@@ -32,6 +34,14 @@ interface CommandFilterBarProps {
   totalCount: number;
   /** Per-category counts from the summary, so a chip can show what it holds. */
   categoryCounts?: Record<string, number>;
+  /**
+   * Device counts from `/api/commands/devices`, per device category and per
+   * alert state, so those chips say how many devices they select.
+   */
+  deviceCounts?: {
+    categories: Record<string, number>;
+    alertStates: Record<string, number>;
+  };
   onChange: (filters: CommandFilters) => void;
 }
 
@@ -50,6 +60,7 @@ function CommandFilterBar({
   resultCount,
   totalCount,
   categoryCounts,
+  deviceCounts,
   onChange,
 }: CommandFilterBarProps) {
   // The search box is the one control the page does not own outright: it types
@@ -83,6 +94,7 @@ function CommandFilterBar({
   const zones = options?.zones ?? [];
   const alertStates = options?.alertStates ?? NODE_ALERT_STATES;
   const severities = options?.alertSeverities ?? ALERT_SEVERITIES;
+  const sensorCategories: SensorCategory[] = options?.sensorCategories ?? SENSOR_CATEGORIES;
 
   // The API sends each category with the command types it covers, so the chip
   // can say what selecting it will include without repeating the mapping.
@@ -95,7 +107,13 @@ function CommandFilterBar({
       ?.commandTypes.map(humanise)
       .join(", ");
 
-  type ChipKey = "statuses" | "origins" | "commandTypes" | "operationCategories" | "alertStates";
+  type ChipKey =
+    | "sensorCategories"
+    | "statuses"
+    | "origins"
+    | "commandTypes"
+    | "operationCategories"
+    | "alertStates";
 
   const toggle = <K extends ChipKey>(key: K, value: CommandFilters[K][number]) => {
     const current = filters[key] as CommandFilters[K][number][];
@@ -125,7 +143,7 @@ function CommandFilterBar({
             id="command-search"
             type="search"
             className="filter-search"
-            placeholder="Node, sensor, zone, operator, parameters or command…"
+            placeholder="Device, MAC, zone, category, operator or command…"
             value={searchDraft}
             onChange={(event) => setSearchDraft(event.target.value)}
           />
@@ -134,6 +152,32 @@ function CommandFilterBar({
               searching…
             </span>
           )}
+        </div>
+      </div>
+
+      {/* Device facets lead: they narrow the live device panel and the traffic
+          sent to those devices at once. */}
+      <div className="filter-group">
+        <span className="filter-group-label">Device category</span>
+        <div className="filter-chips">
+          {sensorCategories.map((category) => {
+            const count = deviceCounts?.categories[category];
+
+            return (
+              <button
+                key={category}
+                type="button"
+                className={`filter-chip device-category-${category.toLowerCase()}${
+                  isActive("sensorCategories", category) ? " active" : ""
+                }`}
+                title={SENSOR_CATEGORY_HINTS[category]}
+                onClick={() => toggle("sensorCategories", category)}
+              >
+                {humanise(category)}
+                {count !== undefined && <span className="filter-chip-count">{count}</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -181,6 +225,11 @@ function CommandFilterBar({
             >
               <span className="filter-chip-dot" />
               {state}
+              {deviceCounts?.alertStates[state] !== undefined && (
+                <span className="filter-chip-count" title="Devices in this state">
+                  {deviceCounts.alertStates[state]}
+                </span>
+              )}
             </button>
           ))}
         </div>

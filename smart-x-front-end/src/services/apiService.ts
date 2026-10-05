@@ -457,6 +457,8 @@ export interface CommandFilterOptions {
   /** Node alert states, escalating — Clear through Active. */
   alertStates: NodeAlertState[];
   alertSeverities: AlertSeverity[];
+  /** Operational categories of device, for the device-category facet. */
+  sensorCategories: SensorCategory[];
   /** Node ids that can be targeted by a manual override. */
   nodes: string[];
   /** Command types each targetable node accepts, keyed by node id. */
@@ -477,6 +479,8 @@ export interface CommandQuery {
   alertStates?: NodeAlertState[];
   /** Lowest severity a node's open alerts must reach to match. */
   minAlertSeverity?: AlertSeverity;
+  /** Operational category of the target device. */
+  sensorCategories?: SensorCategory[];
   zone?: string;
   search?: string;
   manualOnly?: boolean;
@@ -643,6 +647,55 @@ export interface NodeTimeline {
   series: TimelineSeries[];
   /** Commands, alerts and link changes, oldest first. */
   events: SensorLogEntry[];
+}
+
+/* ---------- Command engine: live devices ---------- */
+
+/** The device subset of the page filter — everything that describes a device rather than a command. */
+export interface DeviceQuery {
+  search?: string;
+  sensorCategories?: SensorCategory[];
+  alertStates?: NodeAlertState[];
+  minAlertSeverity?: AlertSeverity;
+  zone?: string;
+}
+
+export interface LiveReading {
+  readingType: ReadingType;
+  unit: string;
+  value: number | null;
+  timestampUtc: string | null;
+  minThreshold: number | null;
+  maxThreshold: number | null;
+  isBoolean: boolean;
+  outOfRange: boolean;
+  /** Most recent values, oldest first. */
+  recent: number[];
+}
+
+export interface LiveDevice {
+  nodeId: string;
+  sensorName: string;
+  macAddress: string;
+  category: SensorCategory;
+  zone: string;
+  room: string;
+  isDisconnected: boolean;
+  alertState: NodeAlertState;
+  alertSeverity: AlertSeverity | null;
+  openAlertCount: number;
+  lastReadingUtc: string | null;
+  readings: LiveReading[];
+}
+
+export interface LiveDeviceResult {
+  /** Every matching device, worst alert first. */
+  items: LiveDevice[];
+  totalRegistered: number;
+  /** Counted with every filter applied except the facet's own. */
+  categoryCounts: Record<string, number>;
+  alertStateCounts: Record<string, number>;
+  generatedUtc: string;
 }
 
 /* ---------- Command engine: suggested actions ---------- */
@@ -906,6 +959,7 @@ function buildCommandQuery(query: CommandQuery, extra: Record<string, unknown> =
     operationCategories: query.operationCategories,
     alertStates: query.alertStates,
     minAlertSeverity: query.minAlertSeverity,
+    sensorCategories: query.sensorCategories,
     zone: query.zone,
     search: query.search,
     manualOnly: query.manualOnly,
@@ -1003,6 +1057,19 @@ export async function getNodeTimeline(
   return handleResponse<NodeTimeline>(response);
 }
 
+/** Every registered device matching the filter, with its latest readings. */
+export async function getLiveDevices(query: DeviceQuery = {}): Promise<LiveDeviceResult> {
+  const search = buildQuery({
+    search: query.search,
+    sensorCategories: query.sensorCategories,
+    alertStates: query.alertStates,
+    minAlertSeverity: query.minAlertSeverity,
+    zone: query.zone,
+  });
+  const response = await fetch(`${API_BASE_URL}/commands/devices${search}`);
+  return handleResponse<LiveDeviceResult>(response);
+}
+
 export async function getInsights(issuedBy = "operator"): Promise<InsightsResponse> {
   const query = buildQuery({ issuedBy });
   const response = await fetch(`${API_BASE_URL}/commands/insights${query}`);
@@ -1054,6 +1121,7 @@ export default {
   getPipelineStatus,
   ingestStreamPackets,
   getNodeTimeline,
+  getLiveDevices,
   getInsights,
   recordActivity,
 };

@@ -3,6 +3,7 @@ import CommandFilterBar from "../components/commands/CommandFilterBar";
 import CommandHistoryTable from "../components/commands/CommandHistoryTable";
 import CommandStream from "../components/commands/CommandStream";
 import IngestPipeline from "../components/commands/IngestPipeline";
+import LiveDevicePanel from "../components/commands/LiveDevicePanel";
 import NodeTimeline from "../components/commands/NodeTimeline";
 import OverrideConsole from "../components/commands/OverrideConsole";
 import type { OverrideDraft } from "../components/commands/OverrideConsole";
@@ -12,7 +13,9 @@ import StatTile from "../components/telemetry/StatTile";
 import {
   EMPTY_FILTERS,
   TIME_WINDOWS,
+  hasActiveFilters,
   toCommandQuery,
+  toDeviceQuery,
 } from "../components/commands/types";
 import type { CommandFilters, CommandRecord } from "../components/commands/types";
 import {
@@ -22,6 +25,7 @@ import {
   getCommandSummary,
   getCommands,
   getInsights,
+  getLiveDevices,
   getNodeTimeline,
   getOverrideHistory,
   getPipelineStatus,
@@ -35,6 +39,7 @@ import type {
   DeviceCommand,
   DispatchCommandRequest,
   InsightsResponse,
+  LiveDeviceResult,
   NodeTimeline as NodeTimelineData,
   OverrideHistoryEntry,
   PagedResult,
@@ -78,6 +83,8 @@ function CommandsPage() {
   const [stream, setStream] = useState<DeviceCommand[]>([]);
   const [history, setHistory] = useState<PagedResult<DeviceCommand> | null>(null);
   const [options, setOptions] = useState<CommandFilterOptions | null>(null);
+  const [devices, setDevices] = useState<LiveDeviceResult | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
 
   // The command engine's side of the page: intake, undo stack, insights and
   // the selected node's timeline.
@@ -123,6 +130,17 @@ function CommandsPage() {
     [],
   );
 
+  // The live device panel takes the device half of the same filter. It fails
+  // on its own, so a device hiccup never blanks the command stream.
+  const loadDevices = useCallback(async (activeFilters: CommandFilters) => {
+    try {
+      setDevices(await getLiveDevices(toDeviceQuery(activeFilters)));
+      setDevicesError(null);
+    } catch (err) {
+      setDevicesError(err instanceof Error ? err.message : "Unable to load devices.");
+    }
+  }, []);
+
   // Refetch whenever the filters or the page change. The rule below sees
   // setState inside loadCommands and assumes it runs synchronously; every call
   // sits after an await, and fetching from the API is exactly the
@@ -132,15 +150,23 @@ function CommandsPage() {
     loadCommands(filters, page);
   }, [filters, page, loadCommands]);
 
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    loadDevices(filters);
+  }, [filters, loadDevices]);
+
   // Live polling: the real-time feedback loop.
   useEffect(() => {
     if (!live) {
       return;
     }
 
-    const timer = window.setInterval(() => loadCommands(filters, page), REFRESH_MS);
+    const timer = window.setInterval(() => {
+      loadCommands(filters, page);
+      loadDevices(filters);
+    }, REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [live, filters, page, loadCommands]);
+  }, [live, filters, page, loadCommands, loadDevices]);
 
   // The engine panels are independent of the command filter, and each fails
   // on its own: an insights hiccup must not blank the intake panel.
@@ -287,9 +313,9 @@ function CommandsPage() {
     const spike: StreamPacketRequest = { nodeId: powerNode, readingType: "Power", value: 12 };
 
     const result = await ingestStreamPackets([...routine, spike]);
-    await Promise.all([loadCommands(filters, page), loadEngine()]);
+    await Promise.all([loadCommands(filters, page), loadEngine(), loadDevices(filters)]);
     return result;
-  }, [options, targetNode, loadCommands, loadEngine, filters, page]);
+  }, [options, targetNode, loadCommands, loadEngine, loadDevices, filters, page]);
 
   const windowLabel =
     TIME_WINDOWS.find((window) => window.minutes === filters.windowMinutes)?.label ?? "1h";
@@ -463,7 +489,22 @@ function CommandsPage() {
         resultCount={stream.length}
         totalCount={totalCount}
         categoryCounts={summary?.categoryCounts}
+        deviceCounts={
+          devices
+            ? { categories: devices.categoryCounts, alertStates: devices.alertStateCounts }
+            : undefined
+        }
         onChange={handleFilterChange}
+      />
+
+      {/* Watch: the incoming sensor data itself, every matching device with its
+          latest readings, before the commands sent to them. */}
+      <LiveDevicePanel
+        result={devices}
+        error={devicesError}
+        selectedNode={targetNode}
+        filtered={hasActiveFilters(filters)}
+        onInspect={focusNode}
       />
 
       {/* Scroll target for "Prepare" on a suggestion. A sibling rather than a

@@ -162,6 +162,7 @@ is enabled so a gateway can send a lost sample as the string `"NaN"`.
 | `POST` | `/api/commands/packets` | Telemetry intake (standard queue / critical lane) |
 | `GET` | `/api/commands/pipeline` | Queue depths, error states, disconnected nodes, recent alerts |
 | `GET` | `/api/commands/nodes/{nodeId}/timeline` | A node's sorted log, ready to chart |
+| `GET` | `/api/commands/devices` | Every device matching category / alert state / severity / zone / search, with its latest readings |
 | `GET` | `/api/commands/insights` | Suggested actions and automated insights |
 | `POST` | `/api/commands/activity` | Record a search or node selection for the action engine |
 
@@ -454,7 +455,18 @@ All logic for the **Real-Time Command Stream and History** page lives in one ser
 
 It replaces the `CommandService`, `CommandRepository` and the tick logic that used to
 live in `CommandDispatchSimulator`. The simulator is now only a 2-second timer that
-calls `RunDispatchCycle()`. The engine is registered as a **singleton**, because its
+calls `RunDispatchCycle()`.
+
+Telemetry is **not** generated inside the engine's tick. A second hosted service,
+`DeviceTelemetrySimulator`, emulates the ESP32 nodes, smart plugs and gateways: every
+2 seconds it sends one HTTP `POST /api/commands/packets` per reporting device
+(identified by its MAC address), plus gateway link-loss reports and occasional buffer
+flushes. Simulated data therefore reaches the API exactly as a real device's would —
+model binding, MAC lookup, lane classification and the critical lane all run on every
+packet. Set `DeviceSimulator:Enabled` to `false` to switch it off, or
+`DeviceSimulator:BaseUrl` to point it at another host.
+
+The engine is registered as a **singleton**, because its
 queues, undo stack, registry, logs and sets are live state shared between requests
 and the dispatch loop. All of that state sits behind one lock (the store's
 `CommandsSyncRoot`), so the command log and the structures built around it are never
@@ -474,6 +486,7 @@ seen half-updated.
 | --- | --- | --- | --- |
 | Dictionary | `Dictionary<string, SensorProfile>` keyed by **node id** and by **MAC address** (case-insensitive), plus one by profile id | `ResolveDevice`, `Dispatch`, `Process`, `RefreshRegistry` | The live device registry. Every incoming packet and every dispatch resolves its device in O(1). The registry rebuilds itself when page 1 registers a new sensor. |
 | Sorted dictionary | `SortedDictionary<DateTime, SensorLogEntry>` per node | `AppendLog`, `GetNodeTimeline` | Each node's historical log (readings, commands, alerts, link changes) keyed by timestamp. Late packets are slotted into place on insert, so the timeline endpoint reads the log out already in order and down-samples it in one forward pass. Retention trims from the smallest key. |
+| Dictionary + bounded queue | `Dictionary<(string NodeId, ReadingType), Queue<TimelinePoint>> _recentReadings` | `TrackRecent`, `GetLiveDevices` | The last 24 values per node and metric. The live device panel reads every device's latest readings and sparkline with one hash probe each, rather than walking each node's full sorted log. |
 
 ### Sets
 

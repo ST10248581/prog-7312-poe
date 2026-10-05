@@ -106,6 +106,7 @@
 /* ---------- Panels ---------- */
 
 .throughput-panel,
+.live-devices,
 .command-stream-panel,
 .override-console,
 .command-history {
@@ -1200,4 +1201,139 @@
   height: 8px;
   border-radius: 50%;
   margin-right: 0.3rem;
+}
+
+/* ---------- Live device readings ----------
+   The incoming sensor data itself: one card per matching device, worst first.
+   The card's edge carries its state, so an alerting or offline device stands
+   out of a full grid before any value is read. */
+
+.device-category-environmental { --category-tone: var(--accent); }
+.device-category-powerconsumption { --category-tone: var(--warning); }
+.device-category-actuator { --category-tone: #38bdf8; }
+.device-category-motion { --category-tone: #818cf8; }
+.device-category-connectivity { --category-tone: var(--text-secondary); }
+
+.live-device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.625rem;
+}
+
+.live-device {
+  --device-tone: var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--device-tone);
+  border-radius: 8px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.live-device:hover { background: var(--bg-surface-hover); }
+
+.live-device:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.live-device.selected {
+  border-color: var(--accent-border);
+  border-left-color: var(--device-tone);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.live-device-ok { --device-tone: var(--accent); }
+.live-device-info,
+.live-device-warning { --device-tone: var(--warning); }
+.live-device-critical { --device-tone: var(--danger); }
+.live-device-offline { --device-tone: var(--text-muted); }
+.live-device-offline .live-device-readings { opacity: 0.55; }
+
+.live-device-head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.live-device-node {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.live-device-link {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.live-device-link.down { color: var(--danger); }
+
+.live-device-meta {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-device-readings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.live-reading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 72px;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.live-reading-type {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-reading-value {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.live-reading-value.out { color: var(--danger); font-weight: 600; }
+
+.live-reading .sparkline { width: 72px; height: 22px; }
+
+.live-device-more {
+  display: block;
+  margin: 0.75rem auto 0;
+  padding: 0.35rem 0.9rem;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.live-device-more:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
 }

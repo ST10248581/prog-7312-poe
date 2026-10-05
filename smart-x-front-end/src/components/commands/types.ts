@@ -17,6 +17,7 @@ import type {
   DeviceCommand,
   NodeAlertState,
   OperationCategory,
+  SensorCategory,
 } from "../../services/apiService";
 
 export type {
@@ -28,12 +29,15 @@ export type {
   DeviceCommand,
   NodeAlertState,
   OperationCategory,
+  SensorCategory,
 };
 
 /** The command record as rendered by this page. */
 export type CommandRecord = DeviceCommand;
 
 export interface CommandFilters {
+  /** Operational category of the device — narrows the devices and their traffic together. */
+  sensorCategories: SensorCategory[];
   statuses: CommandStatus[];
   origins: CommandOrigin[];
   commandTypes: CommandType[];
@@ -52,6 +56,7 @@ export interface CommandFilters {
 }
 
 export const EMPTY_FILTERS: CommandFilters = {
+  sensorCategories: [],
   statuses: [],
   origins: [],
   commandTypes: [],
@@ -88,6 +93,23 @@ export const COMMAND_TYPES: CommandType[] = [
   "FirmwarePush",
   "RequestSample",
 ];
+
+export const SENSOR_CATEGORIES: SensorCategory[] = [
+  "Environmental",
+  "PowerConsumption",
+  "Actuator",
+  "Motion",
+  "Connectivity",
+];
+
+/** What each kind of device is, for the chip tooltips. */
+export const SENSOR_CATEGORY_HINTS: Record<SensorCategory, string> = {
+  Environmental: "Temperature, humidity and pressure nodes",
+  PowerConsumption: "Smart plugs and meters reporting load",
+  Actuator: "Pumps, valves and relays the mesh can switch",
+  Motion: "Presence and motion sensors",
+  Connectivity: "Gateways and mesh repeaters",
+};
 
 export const OPERATION_CATEGORIES: OperationCategory[] = [
   "Configuration",
@@ -148,6 +170,7 @@ export function toCommandQuery(filters: CommandFilters) {
     alertStates: filters.alertStates,
     // "" is the page's "no floor"; the query helper drops undefined keys.
     minAlertSeverity: filters.minAlertSeverity || undefined,
+    sensorCategories: filters.sensorCategories,
     zone: filters.zone,
     search: filters.search,
     manualOnly: filters.manualOnly,
@@ -155,9 +178,25 @@ export function toCommandQuery(filters: CommandFilters) {
   };
 }
 
+/**
+ * The part of the filter that describes a device rather than a command. The
+ * live device panel sends only this, so a command-only facet (status, origin,
+ * window) never empties the device list.
+ */
+export function toDeviceQuery(filters: CommandFilters) {
+  return {
+    search: filters.search,
+    sensorCategories: filters.sensorCategories,
+    alertStates: filters.alertStates,
+    minAlertSeverity: filters.minAlertSeverity || undefined,
+    zone: filters.zone,
+  };
+}
+
 /** True when anything narrows the default slice — drives the Clear button. */
 export function hasActiveFilters(filters: CommandFilters): boolean {
   return (
+    filters.sensorCategories.length > 0 ||
     filters.statuses.length > 0 ||
     filters.origins.length > 0 ||
     filters.commandTypes.length > 0 ||
@@ -180,6 +219,13 @@ export function describeFilters(
 ): { key: keyof CommandFilters; value: string; label: string }[] {
   const chips: { key: keyof CommandFilters; value: string; label: string }[] = [];
 
+  filters.sensorCategories.forEach((category) =>
+    chips.push({
+      key: "sensorCategories",
+      value: category,
+      label: `Device: ${category.replace(/([a-z])([A-Z])/g, "$1 $2")}`,
+    }),
+  );
   filters.operationCategories.forEach((category) =>
     chips.push({ key: "operationCategories", value: category, label: category }),
   );
@@ -226,6 +272,7 @@ export function removeFilter(
   value: string,
 ): CommandFilters {
   switch (key) {
+    case "sensorCategories":
     case "statuses":
     case "origins":
     case "commandTypes":

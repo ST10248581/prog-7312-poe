@@ -43,8 +43,12 @@ public class StreamPacket
     /// <summary>False when the gateway is reporting that it lost the node.</summary>
     public bool LinkUp { get; init; } = true;
 
-    /// <summary>"gateway" for simulated mesh traffic, "api" for posted packets.</summary>
-    public string Source { get; init; } = "gateway";
+    /// <summary>
+    /// How the packet arrived. Every packet now comes through the intake
+    /// endpoint — the device simulator posts over HTTP like a real device — so
+    /// this is "api".
+    /// </summary>
+    public string Source { get; init; } = "api";
 
     /* ---------- Set by classification ---------- */
 

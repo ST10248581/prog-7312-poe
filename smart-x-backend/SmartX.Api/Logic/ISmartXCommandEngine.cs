@@ -39,6 +39,18 @@ public interface ISmartXCommandEngine
     PipelineStatus GetPipelineStatus();
     NodeTimeline? GetNodeTimeline(string nodeId, int minutes, int maxPoints);
 
+    /// <summary>Every registered device matching the query, with its latest readings.</summary>
+    LiveDeviceResult GetLiveDevices(DeviceQuery query);
+
+    /* ---------- Device emulation ---------- */
+
+    /// <summary>
+    /// What the emulated devices and gateways would send this tick. Nothing here
+    /// touches the intake: <see cref="DeviceTelemetrySimulator"/> posts each
+    /// transmission to the packets endpoint over HTTP, as a real device would.
+    /// </summary>
+    IReadOnlyList<DeviceTransmission> ComposeDeviceTransmissions();
+
     /* ---------- Automated action engine ---------- */
 
     InsightsResponse GetInsights(string? issuedBy);
@@ -48,7 +60,7 @@ public interface ISmartXCommandEngine
 
     /// <summary>
     /// One tick of the mesh: advances in-flight commands, issues automated
-    /// traffic, takes in gateway packets and drains both intake lanes.
+    /// traffic and drains both intake lanes.
     /// </summary>
     void RunDispatchCycle();
 }

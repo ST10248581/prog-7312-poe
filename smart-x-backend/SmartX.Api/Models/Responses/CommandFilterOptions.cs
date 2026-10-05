@@ -24,6 +24,9 @@ public class CommandFilterOptions
 
     public List<string> AlertSeverities { get; set; } = new();
 
+    /// <summary>Operational categories of device, for the device-category facet.</summary>
+    public List<string> SensorCategories { get; set; } = new();
+
     /// <summary>Node ids that can be targeted by a manual override.</summary>
     public List<string> Nodes { get; set; } = new();
 

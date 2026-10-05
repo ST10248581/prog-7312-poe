@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using SmartX.Api.Logic;
 using SmartX.Api.Models;
 using SmartX.Api.Models.Requests;
+using SmartX.Api.Models.Stream;
 
 namespace SmartX.Api.Controllers;
 
@@ -29,6 +30,7 @@ public class CommandsController : ControllerBase
         [FromQuery] List<OperationCategory>? operationCategories,
         [FromQuery] List<NodeAlertState>? alertStates,
         [FromQuery] AlertSeverity? minAlertSeverity,
+        [FromQuery] List<SensorCategory>? sensorCategories,
         [FromQuery] string? zone,
         [FromQuery] string? search,
         [FromQuery] bool manualOnly = false,
@@ -38,7 +40,7 @@ public class CommandsController : ControllerBase
     {
         var query = BuildQuery(
             statuses, origins, commandTypes, operationCategories, alertStates,
-            minAlertSeverity, zone, search, manualOnly, windowMinutes);
+            minAlertSeverity, sensorCategories, zone, search, manualOnly, windowMinutes);
 
         query.Page = page;
         query.PageSize = pageSize;
@@ -55,6 +57,7 @@ public class CommandsController : ControllerBase
         [FromQuery] List<OperationCategory>? operationCategories,
         [FromQuery] List<NodeAlertState>? alertStates,
         [FromQuery] AlertSeverity? minAlertSeverity,
+        [FromQuery] List<SensorCategory>? sensorCategories,
         [FromQuery] string? zone,
         [FromQuery] string? search,
         [FromQuery] bool manualOnly = false,
@@ -63,7 +66,7 @@ public class CommandsController : ControllerBase
     {
         var query = BuildQuery(
             statuses, origins, commandTypes, operationCategories, alertStates,
-            minAlertSeverity, zone, search, manualOnly, windowMinutes);
+            minAlertSeverity, sensorCategories, zone, search, manualOnly, windowMinutes);
 
         return Ok(_engine.GetStream(query, take));
     }
@@ -77,6 +80,7 @@ public class CommandsController : ControllerBase
         [FromQuery] List<OperationCategory>? operationCategories,
         [FromQuery] List<NodeAlertState>? alertStates,
         [FromQuery] AlertSeverity? minAlertSeverity,
+        [FromQuery] List<SensorCategory>? sensorCategories,
         [FromQuery] string? zone,
         [FromQuery] string? search,
         [FromQuery] bool manualOnly = false,
@@ -84,7 +88,7 @@ public class CommandsController : ControllerBase
     {
         var query = BuildQuery(
             statuses, origins, commandTypes, operationCategories, alertStates,
-            minAlertSeverity, zone, search, manualOnly, windowMinutes);
+            minAlertSeverity, sensorCategories, zone, search, manualOnly, windowMinutes);
 
         return Ok(_engine.GetSummary(query));
     }
@@ -161,6 +165,29 @@ public class CommandsController : ControllerBase
         return timeline is null ? NotFound(new { error = $"No node registered with id '{nodeId}'." }) : Ok(timeline);
     }
 
+    /// <summary>
+    /// Live device panel: every registered device matching the filter — by
+    /// operational category, alert state, severity, zone or free text — with
+    /// its latest readings. The whole fleet is returned, worst first.
+    /// </summary>
+    [HttpGet("devices")]
+    public IActionResult GetLiveDevices(
+        [FromQuery] List<SensorCategory>? sensorCategories,
+        [FromQuery] List<NodeAlertState>? alertStates,
+        [FromQuery] AlertSeverity? minAlertSeverity,
+        [FromQuery] string? zone,
+        [FromQuery] string? search)
+    {
+        return Ok(_engine.GetLiveDevices(new DeviceQuery
+        {
+            SensorCategories = sensorCategories,
+            AlertStates = alertStates,
+            MinAlertSeverity = minAlertSeverity,
+            Zone = zone,
+            Search = search
+        }));
+    }
+
     /// <summary>Suggested actions and automated insights for the operator.</summary>
     [HttpGet("insights")]
     public IActionResult GetInsights([FromQuery] string? issuedBy)
@@ -188,6 +215,7 @@ public class CommandsController : ControllerBase
         List<OperationCategory>? operationCategories,
         List<NodeAlertState>? alertStates,
         AlertSeverity? minAlertSeverity,
+        List<SensorCategory>? sensorCategories,
         string? zone,
         string? search,
         bool manualOnly,
@@ -201,6 +229,7 @@ public class CommandsController : ControllerBase
             OperationCategories = operationCategories,
             AlertStates = alertStates,
             MinAlertSeverity = minAlertSeverity,
+            SensorCategories = sensorCategories,
             Zone = zone,
             Search = search,
             ManualOnly = manualOnly,
