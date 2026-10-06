@@ -49,9 +49,9 @@ function SuggestedActions({ insights, onPrepare, onSearch, onInspect }: Suggeste
     setDismissed((current) => new Set(current).add(id));
 
   return (
-    <section className="suggested-actions" aria-label="Suggested actions">
+    <section className="suggested-actions" aria-label="Suggested actions and automated insights">
       <header className="panel-head">
-        <h2>Suggested actions</h2>
+        <h2>Suggested Actions &amp; Automated Insights</h2>
         <span className="panel-head-count">
           {insights
             ? `${insights.activeTriggers} live conditions · ${insights.learnedAssociations} learned patterns`
