@@ -122,7 +122,7 @@ both sides must be updated.
 | --- | --- | --- |
 | `/` | — | Redirects to `/telemetry` |
 | `/telemetry` | `TelemetryPage` | Implemented — the dashboard |
-| `/commands` | `CommandsPage` | Implemented — command stream, manual overrides with undo, telemetry intake, suggested actions |
+| `/commands` | `CommandsPage` | Implemented — command stream, manual overrides with undo, telemetry intake, Suggested Actions & Automated Insights |
 | `/topology` | `TopologyPage` | Placeholder (`ComingSoon`), disabled in the navbar |
 
 ## API Reference
@@ -163,7 +163,7 @@ is enabled so a gateway can send a lost sample as the string `"NaN"`.
 | `GET` | `/api/commands/pipeline` | Queue depths, error states, disconnected nodes, recent alerts |
 | `GET` | `/api/commands/nodes/{nodeId}/timeline` | A node's sorted log, ready to chart |
 | `GET` | `/api/commands/devices` | Every device matching category / alert state / severity / zone / search, with its latest readings |
-| `GET` | `/api/commands/insights` | Suggested actions and automated insights |
+| `GET` | `/api/commands/insights` | Suggested Actions & Automated Insights |
 | `POST` | `/api/commands/activity` | Record a search or node selection for the action engine |
 
 ## Key Features
@@ -180,6 +180,20 @@ is enabled so a gateway can send a lost sample as the string `"NaN"`.
 | **Mesh insights** | Aggregate load and the validated deployment tree | `MeshInsights.tsx`, `DeploymentTree.tsx` ← `/api/mesh/*` |
 | **Sensor registration** | Adds a sensor to the register from the dashboard | `RegisterSensorModal.tsx` ← `POST /api/sensors` |
 | **Configuration progress** | Engagement state showing how completely the mesh is configured | `ConfigurationProgress.tsx` ← `GET /api/engagement` |
+
+### Page 2 — Real-Time Command Stream and History
+
+| Feature | What it does | Where it lives |
+| --- | --- | --- |
+| **Suggested Actions & Automated Insights** | Predictive recommendations learned from operator searches, selections and overrides, plus devices flagged as likely faulty — shown before the operator searches for them | `SuggestedActions.tsx` ← `GET /api/commands/insights`, `POST /api/commands/activity` |
+| **Live command stream** | Newest commands first; selecting a row targets the override console at that node | `CommandStream.tsx` ← `GET /api/commands/stream` |
+| **Command history** | The paged audit trail behind the stream, using the same filter | `CommandHistoryTable.tsx` ← `GET /api/commands` |
+| **Filtering and search** | Narrows the stream, history and devices by status, origin, category, alert state, zone or free text | `CommandFilterBar.tsx` ← `GET /api/commands/filter-options` |
+| **Manual overrides with undo** | Queues a command against a node; undo reverses the most recent override | `OverrideConsole.tsx` ← `POST /api/commands`, `/api/commands/overrides/*` |
+| **Telemetry intake** | Routine FIFO lane and critical priority lane, with duplicate-alert suppression | `IngestPipeline.tsx` ← `GET /api/commands/pipeline` |
+| **Live devices** | Every matching device with its latest readings, worst first | `LiveDevicePanel.tsx` ← `GET /api/commands/devices` |
+| **Node timeline** | A node's readings, limits, commands and alerts over the last hour | `NodeTimeline.tsx` ← `GET /api/commands/nodes/{nodeId}/timeline` |
+| **Throughput** | Dispatch rate per minute over the selected window | `ThroughputStrip.tsx` ← `GET /api/commands/summary` |
 
 ### Data storage
 
@@ -500,7 +514,7 @@ duplicate-suppression count, the two sets, and the recent pipeline alerts. **Sim
 power spike** posts 20 routine packets followed by one spike, so you can watch the
 spike get processed before the routine packets queued ahead of it.
 
-### Predictive Action and Recommendation Engine
+### Predictive Action and Recommendation Engine — Suggested Actions & Automated Insights
 
 `GetInsights` merges three sources and keeps the best eight with a bounded min-heap
 (`PriorityQueue<SuggestedAction, double>`):
@@ -528,9 +542,25 @@ spike get processed before the routine packets queued ahead of it.
 The engine starts with two days of seeded operator habits. The flaky nodes the
 simulator keeps breaching reproduce those habits, so the rules fire on real
 conditions from the start. Every search, node selection and override on the page
-feeds back in. The **Suggested actions** panel presents each recommendation with
-its reason, confidence and evidence. **Prepare** fills in the override console,
-where the operator still confirms before anything is sent.
+feeds back in.
+
+**Presentation.** The **Suggested Actions & Automated Insights** panel
+(`SuggestedActions.tsx`) sits at the top of the `/commands` page, above the filter,
+so recommendations are visible before the operator searches. Each card shows:
+
+* its type: **Predicted** (a learned rule), **Next step** (the Markov chain)
+  or **Problem device** (anomaly scoring);
+* the reason in plain words, the confidence, and evidence chips such as
+  "3 failed commands" or "Humidity drifting (z = 3.1)";
+* buttons to **Prepare** the command, **Search** the suggested term, **Inspect**
+  the node, or **Dismiss** the card.
+
+**Prepare** fills in the override console, where the operator still confirms before
+anything is sent. The panel header shows how many live conditions and learned
+patterns the engine is working from.
+
+The list can be empty for the first few seconds after the API starts, until the
+simulator raises the first breach or disconnection.
 
 ## Code Attributions and Reference List
 
