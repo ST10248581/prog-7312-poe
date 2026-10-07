@@ -1,5 +1,6 @@
 using SmartX.Api.Models;
 using SmartX.Api.Models.Requests;
+using SmartX.Api.Models.Validation;
 using SmartX.Api.Models.Responses;
 
 namespace SmartX.Api.Data;
@@ -8,7 +9,6 @@ public class SensorProfileRepository : ISensorProfileRepository
 {
     private const int SparklinePoints = 24;
     private const int RecentReadingCount = 25;
-    private const int RecentBatchCount = 10;
 
     private readonly ISmartXDataStore _store;
 
@@ -62,15 +62,11 @@ public class SensorProfileRepository : ISensorProfileRepository
 
     public SensorDetail? GetDetail(Guid id)
     {
-        var sensor = _store.SensorProfiles.FirstOrDefault(profile => profile.Id == id);
+        var sensor = _store.FindSensor(id);
         if (sensor is null)
         {
             return null;
         }
-
-        var readings = _store.TelemetryReadings
-            .Where(reading => reading.SensorProfileId == id)
-            .ToList();
 
         var thresholds = _store.SensorThresholds
             .Where(threshold => threshold.SensorProfileId == id)
@@ -84,12 +80,11 @@ public class SensorProfileRepository : ISensorProfileRepository
                 .Where(attachment => attachment.SensorProfileId == id)
                 .OrderByDescending(attachment => attachment.UploadedUtc)
                 .ToList(),
-            RecentBatches = _store.IngestionBatches
-                .Where(batch => batch.SensorProfileId == id)
-                .OrderByDescending(batch => batch.ReceivedUtc)
-                .Take(RecentBatchCount)
-                .ToList(),
-            RecentReadings = readings
+            // The batch window already holds exactly the last ten ingests.
+            RecentBatches = _store.RecentBatchesFor(id)?.NewestFirst().ToList() ?? new List<IngestionBatch>(),
+            // Merge the per-type windows rather than sorting every reading the sensor has sent.
+            RecentReadings = _store.RecentReadingWindowsFor(id)
+                .SelectMany(window => window)
                 .OrderByDescending(reading => reading.TimestampUtc)
                 .Take(RecentReadingCount)
                 .ToList(),
@@ -114,18 +109,22 @@ public class SensorProfileRepository : ISensorProfileRepository
 
     public SensorProfile? UpdatePayload(Guid id, UpdateSensorPayloadRequest request)
     {
-        var sensor = _store.SensorProfiles.FirstOrDefault(profile => profile.Id == id);
+        var sensor = _store.FindSensor(id);
         if (sensor is null)
         {
             return null;
         }
 
-        sensor.MacAddress = request.MacAddress;
-        sensor.Room = request.Room;
-        sensor.Zone = request.Zone;
-        sensor.NodeId = request.NodeId;
+        var previousMac = sensor.MacAddress;
+        var previousNodeId = sensor.NodeId;
+
+        sensor.MacAddress = MacAddress.Normalise(request.MacAddress) ?? request.MacAddress.Trim();
+        sensor.Room = request.Room.Trim();
+        sensor.Zone = request.Zone.Trim();
+        sensor.NodeId = request.NodeId.Trim().ToUpperInvariant();
         sensor.Category = request.Category;
 
+        _store.ReindexSensorProfile(sensor, previousMac, previousNodeId);
         return sensor;
     }
 
@@ -134,12 +133,14 @@ public class SensorProfileRepository : ISensorProfileRepository
         var sensor = new SensorProfile
         {
             Id = Guid.NewGuid(),
-            Name = request.Name,
-            MacAddress = request.MacAddress,
+            Name = request.Name.Trim(),
+            // Stored in one canonical form so the same device cannot register twice
+            // under a different notation.
+            MacAddress = MacAddress.Normalise(request.MacAddress) ?? request.MacAddress.Trim(),
             SerialNumber = $"SN-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}",
-            Room = request.Room,
-            Zone = request.Zone,
-            NodeId = request.NodeId,
+            Room = request.Room.Trim(),
+            Zone = request.Zone.Trim(),
+            NodeId = request.NodeId.Trim().ToUpperInvariant(),
             Category = request.Category,
             Status = SensorStatus.Offline,
             FirmwareVersion = "1.0.0",
@@ -148,19 +149,23 @@ public class SensorProfileRepository : ISensorProfileRepository
             IsActive = true
         };
 
-        _store.SensorProfiles.Add(sensor);
+        _store.AddSensorProfile(sensor);
         return sensor;
     }
 
-    public SensorAttachment AddAttachment(Guid sensorId, SensorAttachment attachment, byte[] fileData)
+    public SensorAttachment AddAttachment(Guid sensorId, SensorAttachment attachment, byte[] sealedPayload)
     {
         attachment.SensorProfileId = sensorId;
-        _store.SensorAttachments.Add(attachment);
-        _store.AttachmentFiles[attachment.Id] = fileData;
+        lock (_store.AttachmentFiles)
+        {
+            _store.AttachmentFiles[attachment.Id] = sealedPayload;
+            _store.SensorAttachments.Add(attachment);
+        }
+
         return attachment;
     }
 
-    public (SensorAttachment attachment, byte[] fileData)? GetAttachmentFile(Guid sensorId, Guid attachmentId)
+    public (SensorAttachment Attachment, byte[]? SealedPayload)? GetAttachment(Guid sensorId, Guid attachmentId)
     {
         var attachment = _store.SensorAttachments
             .FirstOrDefault(a => a.Id == attachmentId && a.SensorProfileId == sensorId);
@@ -170,28 +175,21 @@ public class SensorProfileRepository : ISensorProfileRepository
             return null;
         }
 
-        if (!_store.AttachmentFiles.TryGetValue(attachmentId, out var fileData))
-        {
-            // Seeded attachments have no stored bytes — return a placeholder.
-            fileData = System.Text.Encoding.UTF8.GetBytes(
-                $"[placeholder] {attachment.FileName} — {attachment.FileSizeBytes} bytes\n" +
-                $"Type: {attachment.AttachmentType}\n" +
-                $"Uploaded: {attachment.UploadedUtc:u}\n");
-        }
-
-        return (attachment, fileData);
+        return (attachment, _store.AttachmentFiles.GetValueOrDefault(attachmentId));
     }
 
     private SensorListItem BuildListItem(SensorProfile sensor, DateTime cutoff)
     {
-        var readings = _store.TelemetryReadings
-            .Where(reading => reading.SensorProfileId == sensor.Id)
-            .ToList();
+        // Only this sensor's readings, from the per-sensor index, rather than a
+        // scan of every reading in the mesh for every card.
+        var readings = _store.ReadingsFor(sensor.Id);
 
         var primaryType = ReadingTypeFor(sensor);
 
-        var primaryReadings = readings
-            .Where(reading => reading.ReadingType == primaryType)
+        // The sparkline and latest value come from the bounded ring window: its
+        // size is fixed however long the sensor has been reporting. Ordered by
+        // timestamp because a gateway may backfill older samples after newer ones.
+        var primaryReadings = (_store.RecentReadingsFor(sensor.Id, primaryType) ?? Enumerable.Empty<TelemetryReading>())
             .OrderBy(reading => reading.TimestampUtc)
             .ToList();
 
@@ -243,6 +241,16 @@ public class SensorProfileRepository : ISensorProfileRepository
 
     public SensorProfile? GetById(Guid id)
     {
-        return _store.SensorProfiles.FirstOrDefault(profile => profile.Id == id);
+        return _store.FindSensor(id);
+    }
+
+    public SensorProfile? GetByMacAddress(string macAddress)
+    {
+        return _store.FindSensorByMac(macAddress);
+    }
+
+    public SensorProfile? GetByNodeId(string nodeId)
+    {
+        return _store.FindSensorByNodeId(nodeId);
     }
 }

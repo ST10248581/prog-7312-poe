@@ -9,9 +9,13 @@ import type {
 interface SuggestedActionsProps {
   /** Straight from `/api/commands/insights`; null until it arrives. */
   insights: InsightsResponse | null;
-  /** Put the suggested command into the override console for the operator to confirm. */
+  /** Suggestion ids dismissed this session; hidden here, and down-ranked by the API. */
+  dismissed: string[];
+  /** One click: send the command, run the search, apply the filter or inspect the node. */
+  onApply: (suggestion: SuggestedAction) => Promise<void>;
+  /** Put the suggested command into the override console to adjust before sending. */
   onPrepare: (suggestion: SuggestedAction) => void;
-  onSearch: (term: string) => void;
+  onDismiss: (suggestion: SuggestedAction) => void;
   onInspect: (nodeId: string) => void;
 }
 
@@ -27,26 +31,46 @@ const KIND_HINTS: Record<SuggestionKind, string> = {
   ProblemDevice: "Flagged by anomaly scoring of the node's recent readings and commands",
 };
 
+/** The label of the one-click button, which says exactly what it will do. */
+function applyLabel(suggestion: SuggestedAction): string | null {
+  if (suggestion.commandType && suggestion.nodeId) {
+    return `Apply: send ${humanise(suggestion.commandType)}${suggestion.dryRun ? " (dry run)" : ""}`;
+  }
+  if (suggestion.searchTerm) {
+    return `Apply: search “${suggestion.searchTerm}”`;
+  }
+  if (suggestion.filterFacet && suggestion.filterValue) {
+    return `Apply filter: ${humanise(suggestion.filterValue)}`;
+  }
+  if (suggestion.nodeId) {
+    return `Apply: inspect ${suggestion.nodeId}`;
+  }
+  return null;
+}
+
 /**
  * Suggested actions and automated insights, from the API's action engine.
  *
- * The panel surfaces the next move before the operator goes looking for it:
- * the command a condition usually prompts, the step that usually follows the
- * last one, and the nodes that look faulty. Nothing here dispatches on its
- * own. A command suggestion only fills in the override console, where it goes
- * through the same confirmation as a typed one.
+ * Each card says what the engine suggests, why ("Because …", from the rule or
+ * score behind it), and how sure it is. Apply does it in one click — a sent
+ * command lands on the undo stack, so it can be reversed straight away — and
+ * tells the engine the suggestion was taken. Dismiss tells it the opposite, and
+ * the API ranks that suggestion lower from then on.
  */
-function SuggestedActions({ insights, onPrepare, onSearch, onInspect }: SuggestedActionsProps) {
-  // Dismissals are keyed by the API's stable id, so a dismissed card stays
-  // gone across polls but a genuinely new suggestion still appears.
-  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
+function SuggestedActions({ insights, dismissed, onApply, onPrepare, onDismiss, onInspect }: SuggestedActionsProps) {
+  const [applying, setApplying] = useState<string | null>(null);
 
-  const suggestions = (insights?.suggestions ?? []).filter(
-    (suggestion) => !dismissed.has(suggestion.id),
-  );
+  const hidden = new Set(dismissed);
+  const suggestions = (insights?.suggestions ?? []).filter((suggestion) => !hidden.has(suggestion.id));
 
-  const dismiss = (id: string) =>
-    setDismissed((current) => new Set(current).add(id));
+  const apply = async (suggestion: SuggestedAction) => {
+    setApplying(suggestion.id);
+    try {
+      await onApply(suggestion);
+    } finally {
+      setApplying(null);
+    }
+  };
 
   return (
     <section className="suggested-actions" aria-label="Suggested actions and automated insights">
@@ -67,86 +91,104 @@ function SuggestedActions({ insights, onPrepare, onSearch, onInspect }: Suggeste
         </p>
       ) : (
         <ul className="suggestion-list">
-          {suggestions.map((suggestion) => (
-            <li
-              key={suggestion.id}
-              className={`suggestion suggestion-${suggestion.kind.toLowerCase()}`}
-            >
-              <div className="suggestion-head">
-                <span className="suggestion-kind" title={KIND_HINTS[suggestion.kind]}>
-                  {KIND_LABELS[suggestion.kind]}
-                </span>
-                <strong className="suggestion-title">{suggestion.title}</strong>
-                <span
-                  className="suggestion-confidence"
-                  title={`Based on ${suggestion.support} observation${suggestion.support === 1 ? "" : "s"}`}
-                >
-                  {Math.round(suggestion.confidence * 100)}%
-                </span>
-              </div>
+          {suggestions.map((suggestion) => {
+            const label = applyLabel(suggestion);
+            const confidence = Math.round(suggestion.confidence * 100);
 
-              <p className="suggestion-reason">{suggestion.reason}</p>
-
-              {suggestion.signals.length > 0 && (
-                <div className="suggestion-signals">
-                  {suggestion.signals.map((signal) => (
-                    <span key={signal} className="suggestion-signal">
-                      {signal}
-                    </span>
-                  ))}
+            return (
+              <li
+                key={suggestion.id}
+                className={`suggestion suggestion-${suggestion.kind.toLowerCase()}`}
+              >
+                <div className="suggestion-head">
+                  <span className="suggestion-kind" title={KIND_HINTS[suggestion.kind]}>
+                    {KIND_LABELS[suggestion.kind]}
+                  </span>
+                  <strong className="suggestion-title">{suggestion.title}</strong>
+                  <span
+                    className="suggestion-confidence"
+                    title={`Based on ${suggestion.support} observation${suggestion.support === 1 ? "" : "s"}`}
+                  >
+                    {confidence}%
+                  </span>
                 </div>
-              )}
 
-              <div className="suggestion-actions">
-                {suggestion.commandType && suggestion.nodeId && (
-                  <button
-                    type="button"
-                    className="suggestion-btn suggestion-btn-primary"
-                    onClick={() => onPrepare(suggestion)}
-                    title="Fill in the override console. You still confirm before it is sent."
-                  >
-                    Prepare {humanise(suggestion.commandType)}
-                    {suggestion.dryRun ? " (dry run)" : ""}
-                  </button>
+                <div className="suggestion-confidence-bar" aria-hidden="true">
+                  <div style={{ width: `${confidence}%` }} />
+                </div>
+
+                <p className="suggestion-reason">
+                  <span className="suggestion-because">Because</span>{" "}
+                  {suggestion.reason.charAt(0).toLowerCase() + suggestion.reason.slice(1)}
+                </p>
+
+                {suggestion.signals.length > 0 && (
+                  <div className="suggestion-signals">
+                    {suggestion.signals.map((signal) => (
+                      <span key={signal} className="suggestion-signal">
+                        {signal}
+                      </span>
+                    ))}
+                  </div>
                 )}
 
-                {suggestion.searchTerm && (
+                <div className="suggestion-actions">
+                  {label && (
+                    <button
+                      type="button"
+                      className="suggestion-btn suggestion-btn-primary"
+                      onClick={() => apply(suggestion)}
+                      disabled={applying !== null}
+                      title={
+                        suggestion.commandType
+                          ? "Sends it now. It goes on the undo stack, so it can be reversed."
+                          : undefined
+                      }
+                    >
+                      {applying === suggestion.id ? "Applying…" : label}
+                    </button>
+                  )}
+
+                  {suggestion.commandType && suggestion.nodeId && (
+                    <button
+                      type="button"
+                      className="suggestion-btn"
+                      onClick={() => onPrepare(suggestion)}
+                      title="Fill in the override console to adjust it before sending"
+                    >
+                      Edit first
+                    </button>
+                  )}
+
+                  {suggestion.nodeId && !label?.startsWith("Apply: inspect") && (
+                    <button
+                      type="button"
+                      className="suggestion-btn"
+                      onClick={() => onInspect(suggestion.nodeId!)}
+                    >
+                      Inspect {suggestion.nodeId}
+                    </button>
+                  )}
+
                   <button
                     type="button"
-                    className="suggestion-btn suggestion-btn-primary"
-                    onClick={() => onSearch(suggestion.searchTerm!)}
+                    className="suggestion-btn suggestion-btn-dismiss"
+                    onClick={() => onDismiss(suggestion)}
+                    aria-label={`Dismiss ${suggestion.title}`}
+                    title="Hide it and rank it lower from now on"
                   >
-                    Search “{suggestion.searchTerm}”
+                    Dismiss
                   </button>
-                )}
-
-                {suggestion.nodeId && (
-                  <button
-                    type="button"
-                    className="suggestion-btn"
-                    onClick={() => onInspect(suggestion.nodeId!)}
-                  >
-                    Inspect {suggestion.nodeId}
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  className="suggestion-btn suggestion-btn-dismiss"
-                  onClick={() => dismiss(suggestion.id)}
-                  aria-label={`Dismiss ${suggestion.title}`}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </li>
-          ))}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 
       <footer className="suggested-actions-foot">
-        Learned from {insights?.observedActions ?? 0} operator actions (searches,
-        node selections and overrides). Every action you take here refines it.
+        Learned from {insights?.observedActions ?? 0} operator actions (searches, filters,
+        node selections, overrides and undos). Every action you take here refines it.
       </footer>
     </section>
   );

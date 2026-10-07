@@ -6,11 +6,23 @@ namespace SmartX.Api.Logic;
 
 public interface ISensorService
 {
-    List<SensorListItem> GetSensors(TelemetryQuery query);
-    SensorDetail? GetSensorDetail(Guid id);
-    FilterOptions GetFilterOptions();
-    SensorProfile? UpdateSensorPayload(Guid id, UpdateSensorPayloadRequest request);
-    SensorProfile CreateSensor(CreateSensorRequest request);
-    SensorAttachment? UploadAttachment(Guid sensorId, IFormFile file, AttachmentType attachmentType, string description);
-    (SensorAttachment attachment, byte[] fileData)? DownloadAttachment(Guid sensorId, Guid attachmentId);
+    Task<List<SensorListItem>> GetSensorsAsync(TelemetryQuery query, CancellationToken cancellationToken = default);
+    Task<SensorDetail?> GetSensorDetailAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<FilterOptions> GetFilterOptionsAsync(CancellationToken cancellationToken = default);
+    Task<WriteResult<SensorProfile>> UpdateSensorPayloadAsync(Guid id, UpdateSensorPayloadRequest request, CancellationToken cancellationToken = default);
+    Task<WriteResult<SensorProfile>> CreateSensorAsync(CreateSensorRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Validates, hashes and encrypts an uploaded file in a single streaming pass,
+    /// then attaches it to the sensor.
+    /// </summary>
+    Task<WriteResult<SensorAttachment>> UploadAttachmentAsync(
+        Guid sensorId,
+        IFormFile file,
+        AttachmentType attachmentType,
+        string description,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Decrypts an attachment and verifies its SHA-256 before it is served. Null if not found.</summary>
+    Task<AttachmentDownload?> DownloadAttachmentAsync(Guid sensorId, Guid attachmentId, CancellationToken cancellationToken = default);
 }

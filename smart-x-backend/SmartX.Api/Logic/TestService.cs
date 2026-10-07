@@ -12,8 +12,9 @@ public class TestService : ITestService
         _testRepository = testRepository;
     }
 
-    public TestResult GetStatus()
+    public Task<TestResult> GetStatusAsync(CancellationToken cancellationToken = default)
     {
-        return _testRepository.GetStatus();
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_testRepository.GetStatus());
     }
 }

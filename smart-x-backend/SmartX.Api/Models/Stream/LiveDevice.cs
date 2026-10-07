@@ -40,6 +40,31 @@ public class LiveDeviceResult
     public DateTime GeneratedUtc { get; set; }
 }
 
+/// <summary>
+/// An exact lookup by node id or MAC address against the registry
+/// dictionaries, with how long the probe took, so the O(1) claim is visible.
+/// </summary>
+public class DeviceLookupResult
+{
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>The key as it was probed: node ids as typed, MAC addresses in canonical form.</summary>
+    public string NormalisedKey { get; set; } = string.Empty;
+
+    public bool Found { get; set; }
+
+    /// <summary>"NodeId" or "MacAddress": which dictionary answered. Null when neither did.</summary>
+    public string? MatchedBy { get; set; }
+
+    /// <summary>Time spent in the dictionary probes alone.</summary>
+    public double ElapsedMicroseconds { get; set; }
+
+    /// <summary>Entries in the dictionary that answered, to show the time does not grow with it.</summary>
+    public int RegistrySize { get; set; }
+
+    public LiveDevice? Device { get; set; }
+}
+
 /// <summary>One device as the live panel shows it.</summary>
 public class LiveDevice
 {

@@ -27,20 +27,28 @@ public interface ISmartXCommandEngine
     /// </summary>
     (DeviceCommand? command, string? error) Dispatch(DispatchCommandRequest request);
 
-    /// <summary>The undo stack, most recent override first.</summary>
-    List<OverrideHistoryEntry> GetOverrideHistory();
+    /// <summary>The undo and redo stacks, top first.</summary>
+    OverrideHistoryResponse GetOverrideHistory();
 
     /// <summary>Pops the most recent override and cancels or reverts it.</summary>
-    (UndoResult? result, string? error) UndoLastOverride(string? issuedBy);
+    /// <remarks>Idempotent when <paramref name="expectedCommandId"/> is given: an entry already undone is reported, not undone again.</remarks>
+    (UndoResult? result, string? error) UndoLastOverride(string? issuedBy, Guid? expectedCommandId = null);
+
+    /// <summary>Re-applies the most recently undone override. Idempotent in the same way as undo.</summary>
+    (RedoResult? result, string? error) RedoLastUndo(string? issuedBy, Guid? expectedCommandId = null);
 
     /* ---------- Telemetry intake ---------- */
 
     PacketIntakeResult IngestPackets(IEnumerable<StreamPacketRequest> packets);
-    PipelineStatus GetPipelineStatus();
+    /// <param name="knownDisconnected">The disconnected set the caller saw last, to diff against.</param>
+    PipelineStatus GetPipelineStatus(IReadOnlyCollection<string>? knownDisconnected = null);
     NodeTimeline? GetNodeTimeline(string nodeId, int minutes, int maxPoints);
 
     /// <summary>Every registered device matching the query, with its latest readings.</summary>
     LiveDeviceResult GetLiveDevices(DeviceQuery query);
+
+    /// <summary>Exact O(1) lookup by node id or MAC address, timed.</summary>
+    DeviceLookupResult LookupDevice(string key);
 
     /* ---------- Device emulation ---------- */
 
@@ -55,6 +63,12 @@ public interface ISmartXCommandEngine
 
     InsightsResponse GetInsights(string? issuedBy);
     void RecordActivity(OperatorActivityRequest request);
+
+    /// <summary>Applied or dismissed: re-ranks that suggestion from now on.</summary>
+    void RecordSuggestionFeedback(SuggestionFeedbackRequest request);
+
+    /// <summary>Forgets everything learned, so learning can be demonstrated from nothing.</summary>
+    void ResetLearning();
 
     /* ---------- Live loop ---------- */
 

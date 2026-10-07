@@ -22,7 +22,10 @@ prog-7312-poe/
 │       │   ├── SensorsController.cs
 │       │   ├── TelemetryController.cs
 │       │   └── TestController.cs       # Connectivity check
+│       ├── Configuration/        # Typed options: Frontend (CORS origins), Attachments (limits, key)
 │       ├── Logic/                # The two central service classes
+│       │   ├── Attachments/      # AttachmentPolicy (file allow-list, magic bytes), AttachmentCipher (AES-GCM)
+│       │   ├── ServiceResults.cs # WriteResult<T>: Success / NotFound / Conflict / Invalid
 │       │   ├── ISmartXTelemetryEngine.cs
 │       │   ├── ISensorService.cs / ITelemetryService.cs / IAlertService.cs / IEngagementService.cs
 │       │   ├── SmartXTelemetryEngine.cs    # Page 1 — telemetry
@@ -30,38 +33,55 @@ prog-7312-poe/
 │       │   ├── SmartXCommandEngine.cs      # Page 2 — command stream (Part 2 data structures)
 │       │   ├── CommandDispatchSimulator.cs # 2 s timer that drives the command engine
 │       │   └── CommandGenerator.cs         # Builds and advances simulated commands
-│       ├── Data/                 # Repositories + in-memory data store
+│       ├── Data/                 # Repositories + in-memory data store (with indexes)
+│       │   ├── Collections/      # RingBuffer<T> — the custom fixed-capacity collection
 │       │   └── Seeding/          # Demo-data seeders (one per entity)
 │       ├── Models/               # Entities, requests, responses
-│       │   ├── Requests/         # CreateSensorRequest, IngestTelemetryRequest, ...
+│       │   ├── Requests/         # CreateSensorRequest, IngestTelemetryRequest, ... (validated)
+│       │   ├── Validation/       # SensorRules (shared regexes), MacAddress normalisation
 │       │   ├── Responses/        # EcosystemSummary, SensorDetail, LoadComparison, ...
 │       │   ├── Stream/           # StreamPacket, PipelineStatus, NodeTimeline, SuggestedAction, ...
 │       │   └── Telemetry/        # TelemetryPacket<T>, SensorLoad, DeploymentNode
 │       ├── Properties/
 │       │   └── launchSettings.json     # http profile — port 5127
-│       ├── Program.cs            # Entry point, DI registration, CORS, JSON options
+│       ├── appsettings.json      # Frontend:AllowedOrigins, Attachments:* settings
+│       ├── Program.cs            # Entry point, DI registration, options, CORS, JSON options
 │       └── SmartX.Api.csproj     # Project file (net10.0)
 ├── smart-x-front-end/            # React 19 + TypeScript (Vite)
 │   ├── src/
 │   │   ├── pages/                # Route-level pages
 │   │   │   ├── TelemetryPage.tsx       # Page 1 — the telemetry dashboard
+│   │   │   ├── HomePage.tsx            # Overview landing page (brand link)
 │   │   │   ├── CommandsPage.tsx        # Page 2 — command stream and history
-│   │   │   ├── TopologyPage.tsx        # Placeholder (ComingSoon)
-│   │   │   └── TestPage.tsx            # Standalone API connection check (not routed)
+│   │   │   └── NotFoundPage.tsx        # 404 for unknown routes
 │   │   ├── components/
-│   │   │   ├── Navbar.tsx, ComingSoon.tsx
+│   │   │   ├── Navbar.tsx              # Module links with live badge counts
+│   │   │   ├── RouteErrorBoundary.tsx  # Per-page crash containment
+│   │   │   ├── toast/                  # Toast notifications (proactive suggestions)
+│   │   │   ├── ApiStatusBanner.tsx     # Startup check, "API offline" banner, retry/back-off
 │   │   │   ├── commands/         # Page 2 — CommandStream, OverrideConsole (undo),
 │   │   │   │                     # SuggestedActions, IngestPipeline, NodeTimeline, ...
 │   │   │   └── telemetry/        # Dashboard widgets — SensorCard, LiveChart,
 │   │   │                         # AlertFeed, FilterBar, MeshInsights,
-│   │   │                         # DeploymentTree, TroubleshootingGuide, ...
+│   │   │                         # DeploymentTree, TroubleshootingGuide,
+│   │   │                         # RegistrationFields (validated form), ...
+│   │   ├── hooks/
+│   │   │   ├── usePolling.ts           # Non-overlapping, cancellable, visibility-aware polling
+│   │   │   └── useRegistrationForm.ts  # Form state, inline errors, server field errors
+│   │   ├── state/                # AppStateProvider + usePersistentState: page state across navigation
 │   │   ├── services/
-│   │   │   └── apiService.ts     # Typed API client + shared response types
+│   │   │   ├── apiService.ts     # Typed API client + shared response types
+│   │   │   ├── http.ts           # Base URL from env, timeout, retry, ApiError decoding
+│   │   │   └── apiStatus.ts      # Shared online/offline state
+│   │   ├── styles/               # Global styling system: tokens, base, responsive
 │   │   ├── utils/format.ts       # Number/date formatting helpers
+│   │   ├── utils/validation.ts   # Client mirror of the API's validation rules
 │   │   ├── assets/               # Images and SVGs
 │   │   ├── App.tsx               # Root component + react-router routes
 │   │   └── main.tsx              # Entry point
 │   ├── public/
+│   ├── .env.development          # VITE_API_BASE_URL for `npm run dev`
+│   ├── .env.example              # Template for .env.local / .env.production
 │   ├── package.json
 │   └── vite.config.ts
 ├── .gitattributes
@@ -97,11 +117,34 @@ npm run dev
 
 The dev server will start on **http://localhost:5173**.
 
-Both ports are fixed rather than incidental: `Properties/launchSettings.json` pins the
-API to 5127, and `Program.cs` registers a CORS policy (`AllowFrontend`) that allows
-exactly `http://localhost:5173`. The frontend hard-codes `API_BASE_URL` as
-`http://localhost:5127/api` in `src/services/apiService.ts`. If either port changes,
-both sides must be updated.
+### Configuration
+
+Neither side hard-codes the other's address; both read it from configuration.
+
+| Setting | Where | Default | Purpose |
+| --- | --- | --- | --- |
+| `VITE_API_BASE_URL` | `smart-x-front-end/.env.development` | `http://localhost:5127/api` | Where the dashboard sends requests |
+| `VITE_API_TIMEOUT_MS` | `.env.*` (optional) | `10000` | How long a request may take before it is abandoned |
+| `Frontend:AllowedOrigins` | `SmartX.Api/appsettings.json` | `["http://localhost:5173"]` | CORS allow-list |
+| `Attachments:MaxFileSizeBytes` | `appsettings.json` | `10485760` (10 MB) | Largest accepted upload; also sets the multipart limit |
+| `Attachments:ChunkSizeBytes` | `appsettings.json` | `65536` | AES-GCM chunk size for streaming encryption |
+| `Attachments:EncryptionKey` | user-secrets / env var only | generated per run | Base64 AES-256 key — never commit it |
+
+`Properties/launchSettings.json` pins the API to port 5127. To move either side,
+change `VITE_API_BASE_URL` and `Frontend:AllowedOrigins` — no code changes. Copy
+`.env.example` to `.env.local` to override the frontend for one machine, and set
+any backend value with an environment variable (`Frontend__AllowedOrigins__0`,
+`Attachments__EncryptionKey`) or user-secrets:
+
+```bash
+cd smart-x-backend/SmartX.Api
+dotnet user-secrets init
+dotnet user-secrets set "Attachments:EncryptionKey" "$(openssl rand -base64 32)"
+```
+
+Without a key the API generates one at startup. Attachments live in the in-memory
+store, so none outlive the key. Options are validated at startup, so a malformed
+setting stops the API immediately instead of failing on the first request.
 
 ### Verify the Connection
 
@@ -113,23 +156,35 @@ both sides must be updated.
 4. To check the API on its own, call the connectivity endpoint directly:
    `GET http://localhost:5127/api/test`.
 
-> `src/pages/TestPage.tsx` contains a standalone **Test API Connection** button that
-> calls the same endpoint, but it is not currently wired into a route in `App.tsx`.
+**If the API is not running**, the dashboard says so instead of failing silently.
+`ApiStatusBanner` checks `/api/test` at startup. When the API is unreachable it
+shows an **API offline** banner with the command to start the backend, a
+countdown to the next automatic retry (3 s, doubling to 30 s) and a **Retry now**
+button. Once the API answers, the banner reports **Reconnected** and both pages
+reload their data. Every request also has a timeout (`VITE_API_TIMEOUT_MS`), and
+reads are retried once after a network error or 5xx, so a slow or restarting API
+never leaves the UI hanging.
 
 ### Routes
 
 | Route | Page | State |
 | --- | --- | --- |
-| `/` | — | Redirects to `/telemetry` |
+| `/` | `HomePage` | Overview — mesh health, live counts, and where each module resumes |
 | `/telemetry` | `TelemetryPage` | Implemented — the dashboard |
 | `/commands` | `CommandsPage` | Implemented — command stream, manual overrides with undo, telemetry intake, Suggested Actions & Automated Insights |
-| `/topology` | `TopologyPage` | Placeholder (`ComingSoon`), disabled in the navbar |
+| `*` | `NotFoundPage` | 404 with links back to each module |
 
 ## API Reference
 
 All routes are prefixed with `/api`. Enums are serialised as names (for example
 `"Warning"` rather than `1`), and `JsonNumberHandling.AllowNamedFloatingPointLiterals`
 is enabled so a gateway can send a lost sample as the string `"NaN"`.
+
+Every Page 1 action is `async Task<IActionResult>` and takes the request's
+`CancellationToken`, so work stops when the browser abandons a request. Validation
+failures return a `ValidationProblemDetails` body whose `errors` map names each
+field, for example `{"errors": {"MacAddress": ["MAC address must be six hex pairs…"]}}`.
+The dashboard shows each message under the input it belongs to.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
@@ -140,10 +195,10 @@ is enabled so a gateway can send a lost sample as the string `"NaN"`.
 | `GET` | `/api/sensors` | Paged, filtered sensor list |
 | `GET` | `/api/sensors/{id}` | Sensor detail |
 | `GET` | `/api/sensors/filter-options` | Values available to the filter bar |
-| `POST` | `/api/sensors` | Register a sensor |
-| `PUT` | `/api/sensors/{id}/payload` | Update the sensor payload encoding |
-| `POST` | `/api/sensors/{sensorId}/attachments` | Upload an attachment |
-| `GET` | `/api/sensors/{sensorId}/attachments/{attachmentId}/download` | Download an attachment |
+| `POST` | `/api/sensors` | Register a sensor — 201, 400 (field errors), 409 (duplicate MAC / node id) |
+| `PUT` | `/api/sensors/{id}/payload` | Update the registration — 200, 400, 404, 409 |
+| `POST` | `/api/sensors/{sensorId}/attachments` | Upload an attachment (multipart) — validated, hashed, AES-GCM encrypted |
+| `GET` | `/api/sensors/{sensorId}/attachments/{attachmentId}/download` | Download — decrypted and SHA-256 verified |
 | `GET` | `/api/alerts` | Alert feed |
 | `GET` | `/api/engagement` | Engagement / configuration-progress state |
 | `POST` | `/api/mesh/sensors/{sensorId}/ingest` | Gateway batch ingestion |
@@ -178,7 +233,9 @@ is enabled so a gateway can send a lost sample as the string `"NaN"`.
 | **Guided troubleshooting** | Structured next steps for investigating a device | `TroubleshootingGuide.tsx` |
 | **Progressive disclosure** | Summary tiles and cards first; full diagnostics behind a detail modal | `StatTile.tsx` → `SensorCard.tsx` → `SensorDetailModal.tsx` → `SensorDetailPanel.tsx` |
 | **Mesh insights** | Aggregate load and the validated deployment tree | `MeshInsights.tsx`, `DeploymentTree.tsx` ← `/api/mesh/*` |
-| **Sensor registration** | Adds a sensor to the register from the dashboard | `RegisterSensorModal.tsx` ← `POST /api/sensors` |
+| **Sensor registration** | Adds a sensor with inline, as-you-type validation (MAC, node id, name, room, zone and category dropdowns). Submit stays disabled until the form is valid, and server-side 400/409 errors appear under the offending field | `RegisterSensorModal.tsx`, `RegistrationFields.tsx`, `utils/validation.ts` ← `POST /api/sensors` |
+| **Secure attachments** | Drag-and-drop upload with a progress bar and cancel. Type, size and magic bytes are checked on both sides; files are streamed through SHA-256 and AES-256-GCM in 64 KB chunks and verified on download | `SensorDetailPanel.tsx` ← `AttachmentPolicy.cs`, `AttachmentCipher.cs` |
+| **Startup gateway** | Detects an offline API, explains how to start it, retries with back-off, and reloads the pages on reconnect | `ApiStatusBanner.tsx`, `services/http.ts`, `services/apiStatus.ts` |
 | **Configuration progress** | Engagement state showing how completely the mesh is configured | `ConfigurationProgress.tsx` ← `GET /api/engagement` |
 
 ### Page 2 — Real-Time Command Stream and History
@@ -202,6 +259,29 @@ startup by `IDataSeeder.SeedAll()` (`Program.cs`) from the seeders in
 `Data/Seeding/`. Everything written at runtime — ingested batches, registered
 sensors, uploaded attachments — lives only for the lifetime of the process and is
 reset on restart.
+
+The lists act as tables. Beside them the store keeps indexes, so the hot paths
+never scan a whole table:
+
+| Index | Type | Answers |
+| --- | --- | --- |
+| Sensor by id / MAC / node id | `Dictionary<…, SensorProfile>` | O(1) lookups, and duplicate detection at registration |
+| Readings by sensor | `Dictionary<Guid, List<TelemetryReading>>` | A sensor's series without touching other sensors' readings |
+| Recent readings per sensor and type | `RingBuffer<TelemetryReading>` (64) | Sparklines and latest values |
+| Recent ingest batches per sensor | `RingBuffer<IngestionBatch>` (10) | The detail view's ingestion history |
+
+`RingBuffer<T>` (`Data/Collections/RingBuffer.cs`) is the custom collection. It is a
+fixed-capacity circular buffer implementing `IReadOnlyList<T>`:
+
+* **O(1) append, no allocation.** When full, the oldest item is overwritten in place.
+* **O(1) access.** Indexer, `Latest` and `Oldest` are constant time.
+* **Cheap tails.** `TakeLatest(n)` and `NewestFirst()` cost O(n), however long the sensor has been reporting.
+* **Safe enumeration.** A version check rejects modification during enumeration, as the BCL collections do.
+
+Ingestion writes through it (`TelemetryRepository.AppendReadings` →
+`AddReading` / `AddIngestionBatch`), and the sensor grid and detail view read
+from it. Building the sensor grid previously scanned all ~68 000 readings once per
+sensor; it now reads each sensor's own index and a 64-slot window.
 
 ## Proposed Dashboard
 
@@ -490,29 +570,44 @@ seen half-updated.
 
 | Requirement | Structure | Where | What it does |
 | --- | --- | --- | --- |
-| Message queue | `Queue<StreamPacket> _standardLane` | `Enqueue`, `DrainStandardLane` | Routine telemetry packets are processed first in, first out, at a budget of 20 per tick. A gateway burst backs the queue up and it drains over the next ticks. |
-| Priority queue | `PriorityQueue<StreamPacket, (int Rank, long Ticks)> _criticalLane` | `Classify`, `Enqueue`, `DrainCriticalLane` | A packet is classified before it is queued. A severe power spike, a moisture crash (≥ 25 % of the span past the limit, or a threshold marked critical) or a lost link goes to the priority queue, which is drained **immediately**: in the same request for posted packets, and ahead of the FIFO on every tick. The worst breach is dequeued first, with ties in arrival order. |
+| Message queue | `Queue<StreamPacket> _standardLane` | `Enqueue`, `DrainStandardLane` | Routine telemetry packets are processed first in, first out, at a budget of 20 per tick. A gateway burst backs the queue up and it drains over the next ticks. **Backpressure:** the queue holds at most 1 000 packets; past that the oldest are shed and counted (`Dropped`), so a flood cannot grow memory or make every later packet wait longer. The critical lane is never shed. |
+| Priority queue | `PriorityQueue<StreamPacket, (int Rank, long Ticks)> _criticalLane` | `Classify`, `Enqueue`, `DrainCriticalLane` | A packet is classified before it is queued. A severe power spike, a moisture crash (≥ 25 % of the span past the limit, or a threshold marked critical) or a lost link goes to the priority queue, which is drained **immediately**: in the same request for posted packets, and ahead of the FIFO on every tick. The worst breach is dequeued first, with ties in arrival order. Each critical packet records how many queued standard packets it overtook (`BypassedStandard`). |
 | Stack (undo) | `Stack<OverrideHistoryEntry> _overrideHistory` | `Dispatch`, `UndoLastOverride` | Every live manual override is pushed with a revert plan worked out at issue time (the value it replaced). Undo pops the top: a queued command is cancelled; a sent one gets its inverse at Immediate priority (for example, "shut down valves" becomes "open them again", and a threshold or firmware change is restored to the previous value). A restart or a sample request is reported as irreversible. |
+| Stack (redo) | `Stack<OverrideHistoryEntry> _redoHistory` | `UndoLastOverride`, `RedoLastUndo`, `Dispatch` | A cancelled or reverted override is pushed here. Redo pops it, re-sends the same command, and pushes it back onto the undo stack with a fresh revert plan. A new manual override clears the redo stack, as in any editor. |
+| Idempotency | `ExpectedCommandId` on both requests | `UndoLastOverride`, `RedoLastUndo` | The console sends the id of the entry it shows on top. If that entry was already undone (a double click, or a retried request), the API answers `AlreadyUndone` and changes nothing, instead of undoing the next override down. The buttons are disabled while a request is out, and when their stack is empty. |
 
 ### Hash tables, dictionaries and sorted dictionaries
 
 | Requirement | Structure | Where | What it does |
 | --- | --- | --- | --- |
-| Dictionary | `Dictionary<string, SensorProfile>` keyed by **node id** and by **MAC address** (case-insensitive), plus one by profile id | `ResolveDevice`, `Dispatch`, `Process`, `RefreshRegistry` | The live device registry. Every incoming packet and every dispatch resolves its device in O(1). The registry rebuilds itself when page 1 registers a new sensor. |
-| Sorted dictionary | `SortedDictionary<DateTime, SensorLogEntry>` per node | `AppendLog`, `GetNodeTimeline` | Each node's historical log (readings, commands, alerts, link changes) keyed by timestamp. Late packets are slotted into place on insert, so the timeline endpoint reads the log out already in order and down-samples it in one forward pass. Retention trims from the smallest key. |
+| Dictionary | `Dictionary<string, SensorProfile>` keyed by **node id** and by **MAC address**, plus one by profile id | `ResolveDevice`, `Dispatch`, `Process`, `RefreshRegistry`, `LookupDevice` | The live device registry. Every incoming packet and every dispatch resolves its device in O(1). MAC keys are stored in one canonical form (`AA:BB:CC:DD:EE:FF`), so `aa-bb-…` and `AA:BB:…` reach the same entry and can never create duplicates. The registry rebuilds itself when page 1 registers a new sensor. **Instant lookup** on the live device panel calls `GET /api/commands/devices/lookup?key=`, which probes these dictionaries directly and reports the time taken (typically a few microseconds, whatever the registry size). |
+| Sorted list (a sorted dictionary) | `SortedList<DateTime, SensorLogEntry>` per node | `AppendLog`, `LowerBound`, `GetNodeTimeline` | Each node's historical log (readings, commands, alerts, link changes) keyed by timestamp. Late packets are slotted into place on insert, so the timeline reads out already in order. A `SortedList` rather than a `SortedDictionary`: both keep their keys sorted, but `SortedList` stores them in an array, so `LowerBound` can **binary-search** to the first entry in a time window and read forward from there. A window read costs O(log n + k) instead of a walk of the whole log. Readings arrive almost entirely in time order, so inserts land at the end and stay cheap. The timeline shows how many entries the range read skipped, how many it read, and the time taken; its 5 min / 15 min / 1 h / 3 h buttons change the window. |
 | Dictionary + bounded queue | `Dictionary<(string NodeId, ReadingType), Queue<TimelinePoint>> _recentReadings` | `TrackRecent`, `GetLiveDevices` | The last 24 values per node and metric. The live device panel reads every device's latest readings and sparkline with one hash probe each, rather than walking each node's full sorted log. |
 
 ### Sets
 
 | Requirement | Structure | Where | What it does |
 | --- | --- | --- | --- |
-| Hash set — disconnected nodes | `HashSet<string> _disconnectedNodes` | `Enqueue`, `Process` | A repeated "link lost" packet for a node already in the set is dropped at intake with one hash probe. The node is alerted once, not on every tick of the outage. |
-| Hash set — error states | `HashSet<ErrorStateKey> _activeErrorStates` (a `record struct` of node, alert type and metric) | `Process` | `Add` returning false means the breach is a repeat, so the reading is logged but no second alert is raised. The state clears when the value returns in range. An escalation from Warning to Critical still alerts. |
+| Hash set — disconnected nodes | `HashSet<string> _disconnectedNodes` | `Enqueue`, `Process` | A repeated "link lost" packet for a node already in the set is dropped at intake with one hash probe. The node is alerted once, not on every tick of the outage, and its chip shows how many repeats were suppressed ("×12 suppressed"). |
+| Hash set — error states | `HashSet<ErrorStateKey> _activeErrorStates` (a `record struct` of node, alert type and metric) | `Process` | `Add` returning false means the breach is a repeat, so the reading is logged but no second alert is raised. The state clears when the value returns in range. An escalation from Warning to Critical still alerts. Each open state counts the repeat warnings it absorbed, shown on its chip. |
+| Set algebra | `ExceptWith`, `IntersectWith`, `UnionWith` | `CompareDisconnected` | The page sends the disconnected set it saw on its last poll (`GET /api/commands/pipeline?known=…`). The API returns **newly disconnected** = current ∖ known, **recovered** = known ∖ current, **still down** = current ∩ known, and **needs attention** = disconnected ∪ nodes with a critical breach. Nothing has to be stored per client on the server. |
 
-The **Telemetry intake** panel on page 2 shows both lane depths, average waits, the
-duplicate-suppression count, the two sets, and the recent pipeline alerts. **Simulate
-power spike** posts 20 routine packets followed by one spike, so you can watch the
-spike get processed before the routine packets queued ahead of it.
+The **Telemetry intake** panel on page 2 shows:
+
+* both lane depths, with the standard lane's fill against its capacity;
+* average waits, and how many queued packets the critical lane has bypassed;
+* the duplicate-suppression and backpressure counters;
+* the two sets with per-entry repeat counts, and what changed since the last refresh;
+* the recent pipeline alerts.
+
+**Simulate power spike** posts 20 routine packets followed by one spike, so you can
+watch the spike get processed before the routine packets queued ahead of it.
+**Flood standard lane** posts more routine packets than the queue holds, so the
+oldest are shed and counted.
+
+`ErrorStateKey` is a `readonly record struct`. The compiler generates value-based
+`Equals` and `GetHashCode` over its three fields (node, alert type, metric), which is
+what makes it safe and fast as a `HashSet` key.
 
 ### Predictive Action and Recommendation Engine — Suggested Actions & Automated Insights
 
@@ -552,15 +647,88 @@ so recommendations are visible before the operator searches. Each card shows:
   or **Problem device** (anomaly scoring);
 * the reason in plain words, the confidence, and evidence chips such as
   "3 failed commands" or "Humidity drifting (z = 3.1)";
-* buttons to **Prepare** the command, **Search** the suggested term, **Inspect**
-  the node, or **Dismiss** the card.
+* buttons to act on it:
+  * **Apply** does it in one click: sends the command, runs the search, applies the
+    filter or inspects the node. A sent command lands on the undo stack, and the
+    toast offers **Undo**.
+  * **Edit first** puts the command in the override console instead.
+  * **Dismiss** hides the card.
 
-**Prepare** fills in the override console, where the operator still confirms before
-anything is sent. The panel header shows how many live conditions and learned
-patterns the engine is working from.
+**Feedback re-ranks suggestions.** Apply and Dismiss are posted to
+`POST /api/commands/insights/feedback`. A dismissal multiplies that suggestion's score
+by 0.4 per dismissal for 30 minutes. Each application lifts it by 15 % (up to four
+times). Both show as evidence chips on the card.
+
+**Query history feeds the engine.** The page records every search, every filter value
+switched on (`zone:Zone B`, `alertState:Active`, …) and every node inspected
+(`POST /api/commands/activity`). Overrides, undos and redos are recorded by the API
+as they happen. Learned filters come back as suggestions ("Filter to Zone B"). The
+history lives in the engine for the API's lifetime, so it persists across page
+changes and reloads.
+
+**Proactive alerts.** The first time a Predicted or Next-step suggestion reaches 75 %
+confidence, a toast announces it with **Apply** and **Dismiss** buttons, wherever the
+operator is on the page.
+
+**What the engine has learned.** Under the suggestions, the learning panel shows:
+
+* rules learned and next-step links;
+* applied versus dismissed, with the acceptance rate;
+* the five strongest rules, with confidence and count/support;
+* the operator's recent activity.
+
+**Reset learning** (`POST /api/commands/insights/reset`) empties all of it, so the
+engine can be shown picking up a habit from nothing.
 
 The list can be empty for the first few seconds after the API starts, until the
 simulator raises the first breach or disconnection.
+
+### Navigation and preserved state
+
+* **Overview at `/`.** The brand link opens a landing page with mesh health, alerts,
+  commands in flight and "needs attention". It has a card per module that says where
+  that module will resume ("Resume on ENV-001 with filters →").
+* **Live nav badges.** Active alerts on the telemetry link and commands in flight on
+  the command-stream link, refreshed every 15 seconds.
+* **State survives navigation.** `AppStateProvider` (`src/state/`) holds each page's
+  state above the router, and `usePersistentState` replaces `useState` for anything
+  that should outlive the page:
+  * filters, page number, live toggle, target node, timeline window, the open sensor
+    and dismissed suggestions;
+  * the last data fetched, so a page you return to renders at once and refreshes in
+    place.
+
+  The operator's choices are also mirrored to `sessionStorage`, so a reload keeps
+  them too.
+* **No UI freezing.** `usePolling` (`src/hooks/usePolling.ts`) replaces
+  `setInterval`:
+  * it schedules the next poll only after the current one settles, so requests never
+    overlap;
+  * it aborts the request in flight when filters change or the page unmounts
+    (`AbortController`);
+  * it pauses while the browser tab is hidden and refreshes immediately on return.
+* **Crash containment.** Each route is wrapped in `RouteErrorBoundary`. A rendering
+  error shows a retry panel for that page only, and unknown URLs show a 404 page.
+
+### Tests
+
+`smart-x-backend/SmartX.Api.Tests` is an xUnit project (14 tests) that runs the real
+engine over a freshly seeded store:
+
+```bash
+cd smart-x-backend/SmartX.Api.Tests
+dotnet test
+```
+
+* **Queues.** A critical packet is processed while 10 earlier standard packets are
+  still queued. The largest breach is served before a lost link that arrived first.
+  The standard queue sheds exactly the overflow past its capacity.
+* **Sets.** Repeat disconnects are suppressed and counted. The set difference reports
+  a newly disconnected node. MAC lookup works in any notation.
+* **Undo/redo.** Undo cancels a queued override and moves it to the redo stack. Undo
+  restores the previous setting. Undo and redo are idempotent. A new override clears
+  redo.
+* **RingBuffer.** Overwrite order, tail reads, and the modification check.
 
 ## Code Attributions and Reference List
 
@@ -703,12 +871,13 @@ running end to end:
   store seeded at startup. `SmartXTelemetryEngine` exercises the four Part 1 C#
   concepts; `SmartXCommandEngine` exercises the Part 2 data structures and the
   recommendation engine.
-* **Frontend** — `/telemetry` and `/commands` are built and consume the API.
-  `/topology` is a deliberate `ComingSoon` placeholder, disabled in the navbar.
+* **Frontend** — an overview at `/`, and `/telemetry` and `/commands`, all consuming
+  the API, with page state kept across navigation. The Network Topology module is
+  not in the navbar until it is built.
 
 Known gaps, recorded rather than hidden:
 
-* No automated tests in either project.
+* Backend tests cover the Part 2 data structures and `RingBuffer<T>` (`SmartX.Api.Tests`); the frontend has no automated tests.
 * No persistence layer — all runtime data is lost on restart.
-* `src/pages/TestPage.tsx` is no longer reachable; the dashboard replaced it as the
-  connectivity check.
+* `src/pages/TestPage.tsx` has been removed; `ApiStatusBanner` now performs the
+  connectivity check on every load.

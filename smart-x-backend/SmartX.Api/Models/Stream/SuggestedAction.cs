@@ -15,16 +15,27 @@ public enum SuggestionKind
 public enum OperatorActivityKind
 {
     Search,
-    SelectNode
+    SelectNode,
+
+    /// <summary>A filter facet the operator switched on, sent as "facet:value", e.g. "zone:Zone B".</summary>
+    Filter
+}
+
+/// <summary>What the operator did with a suggestion.</summary>
+public enum SuggestionFeedback
+{
+    Applied,
+    Dismissed
 }
 
 /// <summary>
 /// One recommendation from the automated action engine. It carries enough to
-/// act on directly: a search term to apply, or a command to put in the console.
+/// act on directly: a search term or filter to apply, a node to inspect, or a
+/// command to send.
 /// </summary>
 public class SuggestedAction
 {
-    /// <summary>Stable across refreshes, so the UI can keep a dismissal.</summary>
+    /// <summary>Stable across refreshes, so feedback and dismissals attach to the same suggestion.</summary>
     public string Id { get; set; } = string.Empty;
 
     public SuggestionKind Kind { get; set; }
@@ -46,6 +57,10 @@ public class SuggestedAction
     public string? SensorName { get; set; }
 
     public string? SearchTerm { get; set; }
+
+    /// <summary>For a learned filter: which facet (zone, sensorCategory, alertState, status, commandType) and its value.</summary>
+    public string? FilterFacet { get; set; }
+    public string? FilterValue { get; set; }
 
     public CommandType? CommandType { get; set; }
     public string? Parameters { get; set; }
@@ -71,5 +86,49 @@ public class InsightsResponse
     /// <summary>Conditions active right now that rules can fire on.</summary>
     public int ActiveTriggers { get; set; }
 
+    /// <summary>What the engine has learned so far, and how its suggestions have been received.</summary>
+    public LearningStats Learning { get; set; } = new();
+
     public DateTime GeneratedUtc { get; set; }
+}
+
+public class LearningStats
+{
+    /// <summary>Condition ⇒ action rules that currently clear the support and confidence thresholds.</summary>
+    public int RulesLearned { get; set; }
+
+    /// <summary>Distinct action → next-action transitions in the session model.</summary>
+    public int TransitionsLearned { get; set; }
+
+    /// <summary>The strongest rules, best first.</summary>
+    public List<LearnedRule> TopRules { get; set; } = new();
+
+    public int Applied { get; set; }
+    public int Dismissed { get; set; }
+
+    /// <summary>Applied ÷ (applied + dismissed); null before any feedback.</summary>
+    public double? AcceptanceRate { get; set; }
+
+    /// <summary>The operator's most recent recorded actions, newest first.</summary>
+    public List<ActivityEntry> RecentActivity { get; set; } = new();
+}
+
+public class LearnedRule
+{
+    public string Condition { get; set; } = string.Empty;
+    public string Action { get; set; } = string.Empty;
+
+    /// <summary>Times the action followed the condition.</summary>
+    public int Count { get; set; }
+
+    /// <summary>Times the condition was seen with an operator present.</summary>
+    public int Support { get; set; }
+
+    public double Confidence { get; set; }
+}
+
+public class ActivityEntry
+{
+    public string Description { get; set; } = string.Empty;
+    public DateTime AtUtc { get; set; }
 }

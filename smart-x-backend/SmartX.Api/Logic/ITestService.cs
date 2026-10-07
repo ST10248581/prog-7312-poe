@@ -4,5 +4,5 @@ namespace SmartX.Api.Logic;
 
 public interface ITestService
 {
-    TestResult GetStatus();
+    Task<TestResult> GetStatusAsync(CancellationToken cancellationToken = default);
 }

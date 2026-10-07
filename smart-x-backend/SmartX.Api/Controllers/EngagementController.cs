@@ -16,9 +16,9 @@ public class EngagementController : ControllerBase
 
     /// <summary>Configuration-progress state for the engagement strip.</summary>
     [HttpGet]
-    public IActionResult GetEngagement([FromQuery] string? userId)
+    public async Task<IActionResult> GetEngagement([FromQuery] string? userId, CancellationToken cancellationToken)
     {
-        var state = _engagementService.GetEngagement(userId);
+        var state = await _engagementService.GetEngagementAsync(userId, cancellationToken);
         return state is null ? NotFound() : Ok(state);
     }
 }

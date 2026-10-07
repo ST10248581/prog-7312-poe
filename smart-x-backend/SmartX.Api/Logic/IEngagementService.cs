@@ -4,5 +4,5 @@ namespace SmartX.Api.Logic;
 
 public interface IEngagementService
 {
-    EngagementState? GetEngagement(string? userId);
+    Task<EngagementState?> GetEngagementAsync(string? userId, CancellationToken cancellationToken = default);
 }

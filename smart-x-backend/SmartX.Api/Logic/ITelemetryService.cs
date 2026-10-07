@@ -5,7 +5,7 @@ namespace SmartX.Api.Logic;
 
 public interface ITelemetryService
 {
-    PagedResult<TelemetryReading> GetReadings(TelemetryQuery query);
-    List<SensorSeries> GetSeries(Guid sensorProfileId, int hours, int maxPoints);
-    EcosystemSummary GetSummary();
+    Task<PagedResult<TelemetryReading>> GetReadingsAsync(TelemetryQuery query, CancellationToken cancellationToken = default);
+    Task<List<SensorSeries>> GetSeriesAsync(Guid sensorProfileId, int hours, int maxPoints, CancellationToken cancellationToken = default);
+    Task<EcosystemSummary> GetSummaryAsync(CancellationToken cancellationToken = default);
 }

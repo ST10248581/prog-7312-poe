@@ -18,6 +18,15 @@ public class NodeTimeline
 
     public bool IsDisconnected { get; set; }
 
+    /// <summary>Log entries inside the window, found by binary search on the sorted keys.</summary>
+    public int EntriesInWindow { get; set; }
+
+    /// <summary>Older entries the range read jumped over without visiting.</summary>
+    public int EntriesSkipped { get; set; }
+
+    /// <summary>Time taken to locate and copy the window out of the sorted log.</summary>
+    public double RangeReadMicroseconds { get; set; }
+
     public List<TimelineSeries> Series { get; set; } = new();
 
     /// <summary>Commands, alerts and link changes, oldest first.</summary>

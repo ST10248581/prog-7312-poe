@@ -1,4 +1,7 @@
 import { useState } from "react";
+import type { FormEvent } from "react";
+import { lookupDevice, recordActivity } from "../../services/apiService";
+import type { DeviceLookupResult } from "../../services/apiService";
 import Sparkline from "../telemetry/Sparkline";
 import { formatRelative, humanise } from "../../utils/format";
 import type { LiveDevice, LiveDeviceResult, LiveReading } from "../../services/apiService";
@@ -28,6 +31,34 @@ interface LiveDevicePanelProps {
  */
 function LiveDevicePanel({ result, error, selectedNode, filtered, onInspect }: LiveDevicePanelProps) {
   const [expanded, setExpanded] = useState(false);
+  const [lookupKey, setLookupKey] = useState("");
+  const [lookup, setLookup] = useState<DeviceLookupResult | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [lookingUp, setLookingUp] = useState(false);
+
+  // Exact lookup against the API's registry dictionaries (node id, then MAC in
+  // any notation). Unlike the filter search, which narrows the list, this is a
+  // single O(1) probe, and the API reports how long it took.
+  const handleLookup = async (event: FormEvent) => {
+    event.preventDefault();
+    const key = lookupKey.trim();
+    if (!key) return;
+
+    setLookingUp(true);
+    setLookupError(null);
+    try {
+      const result = await lookupDevice(key);
+      setLookup(result);
+      if (result.found) {
+        recordActivity("Search", key);
+      }
+    } catch (err) {
+      setLookup(null);
+      setLookupError(err instanceof Error ? err.message : "Lookup failed.");
+    } finally {
+      setLookingUp(false);
+    }
+  };
 
   const devices = result?.items ?? [];
   const visible = expanded ? devices : devices.slice(0, COLLAPSED_COUNT);
@@ -44,6 +75,53 @@ function LiveDevicePanel({ result, error, selectedNode, filtered, onInspect }: L
             : "loading…"}
         </span>
       </header>
+
+      <form className="device-lookup" onSubmit={handleLookup} role="search">
+        <label className="device-lookup-label" htmlFor="device-lookup-key">
+          Instant lookup
+        </label>
+        <input
+          id="device-lookup-key"
+          className="device-lookup-input"
+          value={lookupKey}
+          onChange={(event) => setLookupKey(event.target.value)}
+          placeholder="Node ID or MAC, e.g. ENV-001 or 5c-a1-2a-2c-3c-6f"
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <button type="submit" className="filter-toggle" disabled={lookingUp || lookupKey.trim() === ""}>
+          {lookingUp ? "Looking up…" : "Find"}
+        </button>
+      </form>
+
+      {lookupError && <p className="device-lookup-result miss">{lookupError}</p>}
+
+      {lookup && (
+        <div className={`device-lookup-result${lookup.found ? " hit" : " miss"}`} role="status">
+          <p className="device-lookup-summary">
+            {lookup.found ? (
+              <>
+                Found <strong>{lookup.device?.nodeId}</strong> via the{" "}
+                {lookup.matchedBy === "MacAddress" ? "MAC address" : "node ID"} dictionary in{" "}
+                <strong>{(lookup.elapsedMicroseconds / 1000).toFixed(4)} ms</strong>
+              </>
+            ) : (
+              <>No device is registered under <code>{lookup.normalisedKey}</code> (checked in {(lookup.elapsedMicroseconds / 1000).toFixed(4)} ms)</>
+            )}
+            <span className="device-lookup-meta">
+              {" "}· one hash probe, {lookup.registrySize} entries · key <code>{lookup.normalisedKey}</code>
+            </span>
+            <button type="button" className="device-lookup-clear" onClick={() => setLookup(null)} aria-label="Clear lookup">
+              ✕
+            </button>
+          </p>
+          {lookup.device && (
+            <div className="live-device-grid">
+              <DeviceCard device={lookup.device} selected={lookup.device.nodeId === selectedNode} onInspect={onInspect} />
+            </div>
+          )}
+        </div>
+      )}
 
       {error && !result && <p className="panel-empty">Unable to load devices: {error}</p>}
 

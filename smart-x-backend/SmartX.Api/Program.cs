@@ -1,9 +1,37 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Http.Features;
+using SmartX.Api.Configuration;
 using SmartX.Api.Data;
 using SmartX.Api.Data.Seeding;
 using SmartX.Api.Logic;
+using SmartX.Api.Logic.Attachments;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Typed configuration. Values come from appsettings.json and can be overridden
+// per environment, by user-secrets or by environment variables
+// (e.g. Frontend__AllowedOrigins__0, Attachments__EncryptionKey). Invalid
+// settings stop the app at start-up rather than on the first request.
+builder.Services.AddOptions<FrontendOptions>()
+    .Bind(builder.Configuration.GetSection(FrontendOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<AttachmentOptions>()
+    .Bind(builder.Configuration.GetSection(AttachmentOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+var frontendOptions = builder.Configuration.GetSection(FrontendOptions.SectionName).Get<FrontendOptions>() ?? new FrontendOptions();
+var attachmentOptions = builder.Configuration.GetSection(AttachmentOptions.SectionName).Get<AttachmentOptions>() ?? new AttachmentOptions();
+
+// Multipart bodies are capped at the attachment limit plus a little room for
+// the form's other fields, so an oversized upload is refused while it is being
+// read rather than after it has been buffered.
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = attachmentOptions.MaxFileSizeBytes + 64 * 1024;
+});
 
 // Add services to the container.
 builder.Services.AddControllers()
@@ -43,6 +71,9 @@ builder.Services.AddScoped<ITelemetryService>(provider => provider.GetRequiredSe
 builder.Services.AddScoped<IAlertService>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
 builder.Services.AddScoped<IEngagementService>(provider => provider.GetRequiredService<SmartXTelemetryEngine>());
 
+// Encrypts attachments at rest. A singleton, so the key is loaded once.
+builder.Services.AddSingleton<AttachmentCipher>();
+
 // In-memory data store and demo data seeding.
 builder.Services.AddSingleton<SeedOptions>();
 builder.Services.AddSingleton<ISmartXDataStore, SmartXDataStore>();
@@ -66,11 +97,13 @@ builder.Services.AddHostedService<CommandDispatchSimulator>();
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<DeviceTelemetrySimulator>();
 
+// The CORS allow-list comes from Frontend:AllowedOrigins, so the dashboard can
+// move host or port without a code change.
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins(frontendOptions.AllowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod();
     });

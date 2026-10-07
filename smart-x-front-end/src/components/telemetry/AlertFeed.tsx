@@ -5,6 +5,8 @@ interface AlertFeedProps {
   alerts: Alert[];
   sensors: SensorListItem[];
   totalActive: number;
+  /** False until the first successful load, so an empty feed is not mistaken for a quiet mesh. */
+  loaded?: boolean;
   onSelectSensor: (id: string) => void;
 }
 
@@ -13,7 +15,7 @@ interface AlertFeedProps {
  * the footer states what is being withheld so the cap is visible rather than
  * silently hiding events.
  */
-function AlertFeed({ alerts, sensors, totalActive, onSelectSensor }: AlertFeedProps) {
+function AlertFeed({ alerts, sensors, totalActive, loaded = true, onSelectSensor }: AlertFeedProps) {
   const nodeFor = (sensorProfileId: string) =>
     sensors.find((sensor) => sensor.id === sensorProfileId)?.nodeId ?? "unknown node";
 
@@ -25,7 +27,7 @@ function AlertFeed({ alerts, sensors, totalActive, onSelectSensor }: AlertFeedPr
       </header>
 
       {alerts.length === 0 ? (
-        <p className="panel-empty">Nothing active. The mesh is behaving.</p>
+        <p className="panel-empty">{loaded ? "Nothing active. The mesh is behaving." : "Waiting for the first alert feed…"}</p>
       ) : (
         <ul className="alert-list">
           {alerts.map((alert) => (

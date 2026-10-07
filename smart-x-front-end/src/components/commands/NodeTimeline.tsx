@@ -5,7 +5,13 @@ interface NodeTimelineProps {
   nodeId: string;
   timeline: NodeTimelineData | null;
   error: string | null;
+  /** Window to read, in minutes; the API binary-searches the log for its start. */
+  windowMinutes: number;
+  onWindowChange: (minutes: number) => void;
 }
+
+/** Windows the timeline can show. Shorter windows make the range read's skip obvious. */
+const TIMELINE_WINDOWS = [5, 15, 60, 180];
 
 const WIDTH = 760;
 const CHART_HEIGHT = 120;
@@ -23,11 +29,13 @@ const PLOT_HEIGHT = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
  * limits drawn in, and a shared event rail below for commands, alerts and link
  * changes.
  *
- * The API reads this out of the node's SortedDictionary, so the points arrive
- * in timestamp order and already thinned. The chart maps them straight to
- * coordinates, with no sorting or bucketing in the browser.
+ * The API reads this out of the node's SortedList with a range read: a binary
+ * search finds the first entry inside the window and everything older is
+ * skipped without being visited. The points arrive in timestamp order and
+ * already thinned, so the chart maps them straight to coordinates, with no
+ * sorting or bucketing in the browser. The read's cost is shown under the title.
  */
-function NodeTimeline({ nodeId, timeline, error }: NodeTimelineProps) {
+function NodeTimeline({ nodeId, timeline, error, windowMinutes, onWindowChange }: NodeTimelineProps) {
   if (error) {
     return (
       <section className="node-timeline" aria-label={`Timeline for ${nodeId}`}>
@@ -63,10 +71,26 @@ function NodeTimeline({ nodeId, timeline, error }: NodeTimelineProps) {
           <span className="node-timeline-name">{timeline.sensorName}</span>
           {timeline.isDisconnected && <span className="node-timeline-offline">disconnected</span>}
         </h2>
-        <span className="panel-head-count">
-          last {timeline.windowMinutes} min · {timeline.logSize} log entries
-        </span>
+        <div className="node-timeline-windows" role="group" aria-label="Timeline window">
+          {TIMELINE_WINDOWS.map((minutes) => (
+            <button
+              key={minutes}
+              type="button"
+              className={`filter-chip${minutes === windowMinutes ? " active" : ""}`}
+              aria-pressed={minutes === windowMinutes}
+              onClick={() => onWindowChange(minutes)}
+            >
+              {minutes < 60 ? `${minutes} min` : `${minutes / 60} h`}
+            </button>
+          ))}
+        </div>
       </header>
+
+      <p className="node-timeline-range" title="Binary search over the sorted keys, then a forward read of the window">
+        Range read: skipped <strong>{timeline.entriesSkipped.toLocaleString()}</strong> older entries,
+        read <strong>{timeline.entriesInWindow.toLocaleString()}</strong> of {timeline.logSize.toLocaleString()} in{" "}
+        <strong>{(timeline.rangeReadMicroseconds / 1000).toFixed(3)} ms</strong> · SortedList, O(log n + k)
+      </p>
 
       {timeline.series.map((series) => (
         <SeriesChart key={series.readingType} series={series} x={x} />

@@ -189,25 +189,6 @@
     flex-basis: auto;
   }
 
-  .app-content .coming-soon {
-    padding: 2rem 1rem;
-  }
-
-  .app-content .coming-soon-icon {
-    font-size: 2.5rem;
-    margin-bottom: 1rem;
-  }
-
-  .app-content .coming-soon-feature,
-  .app-content .coming-soon p {
-    font-size: 0.875rem;
-  }
-
-  .app-content .coming-soon::after {
-    width: 200px;
-    height: 200px;
-  }
-
   /* Give the dialog nearly the full viewport on a small screen. */
   .app-content .modal-backdrop {
     padding: 1rem 0.75rem;
@@ -275,6 +256,14 @@
 
   .commands-page .throughput-window {
     margin-left: 0;
+  }
+
+  /* Notifications span the bottom of the screen. */
+  body .toast-stack {
+    right: var(--space-2);
+    left: var(--space-2);
+    bottom: var(--space-2);
+    width: auto;
   }
 }
 

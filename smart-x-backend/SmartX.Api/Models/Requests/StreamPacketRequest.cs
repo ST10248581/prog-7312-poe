@@ -33,4 +33,19 @@ public class OperatorActivityRequest
 public class UndoOverrideRequest
 {
     public string IssuedBy { get; set; } = "operator";
+
+    /// <summary>
+    /// The command id the client believes is on top of the stack. When it has
+    /// already been undone (or redone) the request is a no-op instead of acting
+    /// on the next entry down, which makes a double click or a retry safe.
+    /// </summary>
+    public Guid? ExpectedCommandId { get; set; }
+}
+
+/// <summary>Feedback on one suggestion, which the engine uses to re-rank it.</summary>
+public class SuggestionFeedbackRequest
+{
+    public string SuggestionId { get; set; } = string.Empty;
+    public SuggestionFeedback Outcome { get; set; }
+    public string IssuedBy { get; set; } = "operator";
 }

@@ -1,6 +1,13 @@
-import { useCallback, useRef, useState } from "react";
-import type { AttachmentType, SensorCategory, SensorDetail } from "../../services/apiService";
-import { getAttachmentDownloadUrl, updateSensorPayload, uploadAttachment } from "../../services/apiService";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DragEvent, FormEvent } from "react";
+import type { AttachmentType, SensorDetail, SensorProfile } from "../../services/apiService";
+import {
+  ApiError,
+  getAttachmentDownloadUrl,
+  updateSensorPayload,
+  uploadAttachment,
+} from "../../services/apiService";
+import { acceptAttribute, allowedExtensions, validateAttachment } from "../../utils/validation";
 import {
   formatBytes,
   formatDateTime,
@@ -9,6 +16,8 @@ import {
   humanise,
 } from "../../utils/format";
 import LiveChart from "./LiveChart";
+import RegistrationFields from "./RegistrationFields";
+import { useRegistrationForm } from "../../hooks/useRegistrationForm";
 import TroubleshootingGuide from "./TroubleshootingGuide";
 
 interface SensorDetailPanelProps {
@@ -17,6 +26,8 @@ interface SensorDetailPanelProps {
   onClose: () => void;
   onPayloadUpdated?: (updatedDetail: SensorDetail) => void;
   onDetailRefresh?: () => void;
+  /** Zones reported by the API, for the registration form's zone dropdown. */
+  zones?: string[];
 }
 
 type Tab = "readings" | "thresholds" | "attachments" | "ingestion" | "alerts" | "registration";
@@ -30,14 +41,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "registration", label: "Registration" },
 ];
 
-const SENSOR_CATEGORIES: SensorCategory[] = [
-  "Environmental",
-  "PowerConsumption",
-  "Actuator",
-  "Motion",
-  "Connectivity",
-];
-
 const ATTACHMENT_TYPES: AttachmentType[] = [
   "ConfigFile",
   "DeploymentPhoto",
@@ -48,7 +51,17 @@ const ATTACHMENT_TYPES: AttachmentType[] = [
  * Details on demand. Nothing here is shown at overview level; it opens only
  * once a specific node is being investigated.
  */
-function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetailRefresh }: SensorDetailPanelProps) {
+function registrationOf(profile: SensorProfile | undefined) {
+  return {
+    macAddress: profile?.macAddress ?? "",
+    room: profile?.room ?? "",
+    zone: profile?.zone ?? "",
+    nodeId: profile?.nodeId ?? "",
+    category: profile?.category ?? "Environmental",
+  };
+}
+
+function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetailRefresh, zones }: SensorDetailPanelProps) {
   // The parent keys this component by sensor id, so opening a different node
   // remounts it and these both start fresh.
   const [tab, setTab] = useState<Tab>("readings");
@@ -56,82 +69,122 @@ function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetai
 
   // Upload state
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const [uploadType, setUploadType] = useState<AttachmentType>("ConfigFile");
   const [uploadDesc, setUploadDesc] = useState("");
-  const [uploading, setUploading] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  const handleUpload = useCallback(async () => {
-    const file = fileInputRef.current?.files?.[0];
-    if (!file || !detail) {
-      setUploadMessage({ type: "error", text: "Please select a file." });
+  const uploading = uploadProgress !== null;
+  const fileError = uploadFile ? validateAttachment(uploadFile, uploadType) : null;
+
+  // Cancel an in-flight upload if the panel closes.
+  useEffect(() => () => uploadAbortRef.current?.abort(), []);
+
+  const chooseFile = useCallback((file: File | null) => {
+    setUploadFile(file);
+    setUploadMessage(null);
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLLabelElement>) => {
+      event.preventDefault();
+      setDragActive(false);
+      if (!uploading) {
+        chooseFile(event.dataTransfer.files?.[0] ?? null);
+      }
+    },
+    [chooseFile, uploading]
+  );
+
+  const handleUpload = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    if (!uploadFile || !detail || fileError) {
       return;
     }
 
-    setUploading(true);
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+    setUploadProgress(0);
     setUploadMessage(null);
+
     try {
-      await uploadAttachment(detail.profile.id, file, uploadType, uploadDesc);
-      setUploadMessage({ type: "success", text: `"${file.name}" uploaded successfully.` });
+      const attachment = await uploadAttachment(detail.profile.id, uploadFile, uploadType, uploadDesc, {
+        onProgress: setUploadProgress,
+        signal: controller.signal,
+      });
+      setUploadMessage({
+        type: "success",
+        text: `"${attachment.fileName}" uploaded and encrypted. SHA-256 ${attachment.sha256.slice(0, 12)}…`,
+      });
       setUploadDesc("");
+      setUploadFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       onDetailRefresh?.();
     } catch (err) {
-      setUploadMessage({
-        type: "error",
-        text: err instanceof Error ? err.message : "Upload failed.",
-      });
+      if (controller.signal.aborted) {
+        setUploadMessage({ type: "error", text: "Upload cancelled." });
+      } else {
+        setUploadMessage({
+          type: "error",
+          text: err instanceof ApiError ? (err.fieldErrors.file ?? err.message) : "Upload failed.",
+        });
+      }
     } finally {
-      setUploading(false);
+      uploadAbortRef.current = null;
+      setUploadProgress(null);
     }
-  }, [detail, uploadType, uploadDesc, onDetailRefresh]);
+  }, [detail, uploadFile, fileError, uploadType, uploadDesc, onDetailRefresh]);
 
   // Registration form state
-  const [payloadForm, setPayloadForm] = useState<{
-    macAddress: string;
-    room: string;
-    zone: string;
-    nodeId: string;
-    category: SensorCategory;
-  } | null>(null);
+  const registration = useRegistrationForm(registrationOf(detail?.profile));
   const [payloadSaving, setPayloadSaving] = useState(false);
   const [payloadMessage, setPayloadMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Initialise the form from the profile when switching to the registration tab
+  // Re-read the form from the profile when switching to the registration tab.
+  const resetRegistration = registration.reset;
   const initPayloadForm = useCallback(() => {
     if (!detail) return;
-    setPayloadForm({
-      macAddress: detail.profile.macAddress,
-      room: detail.profile.room,
-      zone: detail.profile.zone,
-      nodeId: detail.profile.nodeId,
-      category: detail.profile.category,
-    });
+    resetRegistration(registrationOf(detail.profile));
     setPayloadMessage(null);
-  }, [detail]);
+  }, [detail, resetRegistration]);
 
-  const handlePayloadSave = useCallback(async () => {
-    if (!detail || !payloadForm) return;
+  const handlePayloadSave = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    registration.markSubmitted();
+    if (!detail || !registration.isValid) return;
+
     setPayloadSaving(true);
     setPayloadMessage(null);
     try {
-      const updatedProfile = await updateSensorPayload(detail.profile.id, payloadForm);
+      const updatedProfile = await updateSensorPayload(detail.profile.id, registration.form);
       // Update the detail in place so the header reflects changes
       const updatedDetail: SensorDetail = {
         ...detail,
         profile: updatedProfile,
       };
       onPayloadUpdated?.(updatedDetail);
+      registration.reset(registrationOf(updatedProfile));
       setPayloadMessage({ type: "success", text: "Registration updated successfully." });
     } catch (err) {
-      setPayloadMessage({
-        type: "error",
-        text: err instanceof Error ? err.message : "Failed to save registration.",
-      });
+      if (err instanceof ApiError && Object.keys(err.fieldErrors).length > 0) {
+        registration.setServerErrors(err.fieldErrors);
+        setPayloadMessage({
+          type: "error",
+          text: err.status === 409 ? "Another device already uses that identity." : "Please correct the highlighted fields.",
+        });
+      } else {
+        setPayloadMessage({
+          type: "error",
+          text: err instanceof Error ? err.message : "Failed to save registration.",
+        });
+      }
     } finally {
       setPayloadSaving(false);
     }
-  }, [detail, payloadForm, onPayloadUpdated]);
+  }, [detail, registration, onPayloadUpdated]);
 
   if (loading && !detail) {
     return (
@@ -325,56 +378,117 @@ function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetai
 
         {tab === "attachments" && (
           <div className="attachments-section">
-            <div className="upload-form">
+            <form className="upload-form" onSubmit={handleUpload} noValidate>
               <h3 className="upload-form-title">Upload Attachment</h3>
+
               <div className="upload-form-row">
-                <label className="payload-field upload-field-file">
-                  <span className="payload-field-label">File</span>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="upload-file-input"
-                  />
-                </label>
                 <label className="payload-field upload-field-type">
                   <span className="payload-field-label">Type</span>
                   <select
                     className="payload-input"
                     value={uploadType}
-                    onChange={(e) => setUploadType(e.target.value as AttachmentType)}
+                    disabled={uploading}
+                    onChange={(e) => {
+                      setUploadType(e.target.value as AttachmentType);
+                      setUploadMessage(null);
+                    }}
                   >
                     {ATTACHMENT_TYPES.map((t) => (
                       <option key={t} value={t}>{humanise(t)}</option>
                     ))}
                   </select>
                 </label>
+
+                <label className="payload-field upload-field-desc">
+                  <span className="payload-field-label">Description</span>
+                  <input
+                    type="text"
+                    className="payload-input"
+                    value={uploadDesc}
+                    maxLength={200}
+                    disabled={uploading}
+                    placeholder="Optional description"
+                    onChange={(e) => setUploadDesc(e.target.value)}
+                  />
+                </label>
               </div>
-              <label className="payload-field">
-                <span className="payload-field-label">Description</span>
+
+              {/* The whole zone is the file input's label, so clicking it or
+                  dropping a file on it both choose the file. */}
+              <label
+                className={`upload-dropzone${dragActive ? " drag-active" : ""}${fileError ? " has-error" : ""}${uploading ? " is-uploading" : ""}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  if (!uploading) setDragActive(true);
+                }}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={handleDrop}
+              >
                 <input
-                  type="text"
-                  className="payload-input"
-                  value={uploadDesc}
-                  placeholder="Optional description"
-                  onChange={(e) => setUploadDesc(e.target.value)}
+                  ref={fileInputRef}
+                  type="file"
+                  className="upload-dropzone-input"
+                  accept={acceptAttribute(uploadType)}
+                  disabled={uploading}
+                  onChange={(e) => chooseFile(e.target.files?.[0] ?? null)}
                 />
+                <span className="upload-dropzone-icon" aria-hidden="true">⇪</span>
+                {uploadFile ? (
+                  <span className="upload-dropzone-file">
+                    <span className="upload-dropzone-name">{uploadFile.name}</span>
+                    <span className="upload-dropzone-meta">{formatBytes(uploadFile.size)} · click or drop to replace</span>
+                  </span>
+                ) : (
+                  <span className="upload-dropzone-file">
+                    <span className="upload-dropzone-name">Drop a file here or click to browse</span>
+                    <span className="upload-dropzone-meta">
+                      {allowedExtensions(uploadType).join(" ")} · up to 10 MB · encrypted at rest
+                    </span>
+                  </span>
+                )}
               </label>
+
+              {fileError && (
+                <div className="payload-field-error" role="alert">{fileError}</div>
+              )}
+
+              {uploading && (
+                <div className="upload-progress" role="progressbar" aria-label="Upload progress"
+                  aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((uploadProgress ?? 0) * 100)}>
+                  <div className="upload-progress-bar">
+                    <div className="upload-progress-fill" style={{ width: `${(uploadProgress ?? 0) * 100}%` }} />
+                  </div>
+                  <span className="upload-progress-label">
+                    {(uploadProgress ?? 0) < 1 ? `Uploading ${Math.round((uploadProgress ?? 0) * 100)}%` : "Encrypting…"}
+                  </span>
+                </div>
+              )}
+
               {uploadMessage && (
-                <div className={`payload-message payload-message-${uploadMessage.type}`}>
+                <div className={`payload-message payload-message-${uploadMessage.type}`} role="status">
                   {uploadMessage.text}
                 </div>
               )}
+
               <div className="payload-actions">
                 <button
-                  type="button"
+                  type="submit"
                   className="payload-btn payload-btn-save"
-                  disabled={uploading}
-                  onClick={handleUpload}
+                  disabled={uploading || !uploadFile || Boolean(fileError)}
                 >
-                  {uploading ? "Uploading..." : "Upload File"}
+                  {uploading ? "Uploading…" : "Upload File"}
                 </button>
+                {uploading && (
+                  <button
+                    type="button"
+                    className="payload-btn payload-btn-reset"
+                    onClick={() => uploadAbortRef.current?.abort()}
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
-            </div>
+            </form>
 
             <ul className="attachment-list">
               {attachments.length === 0 && <li className="panel-empty">No files attached.</li>}
@@ -388,28 +502,31 @@ function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetai
                         : "📄"}
                   </span>
                   <div className="attachment-body">
-                    <span className="attachment-name">{attachment.fileName}</span>
+                    <span className="attachment-name" title={attachment.fileName}>{attachment.fileName}</span>
                     <span className="attachment-meta">
                       {humanise(attachment.attachmentType)} · {formatBytes(attachment.fileSizeBytes)} ·{" "}
                       {attachment.uploadedBy} · {formatDateTime(attachment.uploadedUtc)}
                     </span>
-                    <span className="attachment-desc">{attachment.description}</span>
+                    {attachment.description && (
+                      <span className="attachment-desc">{attachment.description}</span>
+                    )}
+                    {attachment.isEncrypted && (
+                      <span className="attachment-security" title={`SHA-256 ${attachment.sha256}`}>
+                        🔒 AES-256-GCM · SHA-256 {attachment.sha256.slice(0, 12)}…
+                      </span>
+                    )}
                   </div>
-                  <button
-                    type="button"
+                  {/* The API answers with Content-Disposition: attachment, so a
+                      plain link downloads the file without leaving the page. */}
+                  <a
                     className="attachment-download"
-                    title="Download"
-                    onClick={() => {
-                      const url = getAttachmentDownloadUrl(profile.id, attachment.id);
-                      const iframe = document.createElement("iframe");
-                      iframe.style.display = "none";
-                      iframe.src = url;
-                      document.body.appendChild(iframe);
-                      setTimeout(() => iframe.remove(), 30000);
-                    }}
+                    href={getAttachmentDownloadUrl(profile.id, attachment.id)}
+                    download={attachment.fileName}
+                    title={`Download ${attachment.fileName}`}
+                    aria-label={`Download ${attachment.fileName}`}
                   >
                     ↓
-                  </button>
+                  </a>
                 </li>
               ))}
             </ul>
@@ -464,87 +581,27 @@ function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetai
           </ul>
         )}
 
-        {tab === "registration" && payloadForm && (
-          <div className="payload-form">
+        {tab === "registration" && (
+          <form className="payload-form" noValidate onSubmit={handlePayloadSave}>
             <p className="payload-form-intro">
               Manage the sensor registration record for this device. Changes are applied immediately.
             </p>
 
-            <label className="payload-field">
-              <span className="payload-field-label">MAC Address / Unique Identifier</span>
-              <input
-                type="text"
-                className="payload-input"
-                value={payloadForm.macAddress}
-                placeholder="e.g. AA:BB:CC:DD:EE:FF"
-                onChange={(e) => setPayloadForm({ ...payloadForm, macAddress: e.target.value })}
-              />
-            </label>
-
-            <label className="payload-field">
-              <span className="payload-field-label">Room</span>
-              <input
-                type="text"
-                className="payload-input"
-                value={payloadForm.room}
-                placeholder="e.g. Server Room A"
-                onChange={(e) => setPayloadForm({ ...payloadForm, room: e.target.value })}
-              />
-            </label>
-
-            <label className="payload-field">
-              <span className="payload-field-label">Zone</span>
-              <input
-                type="text"
-                className="payload-input"
-                value={payloadForm.zone}
-                placeholder="e.g. Zone A"
-                onChange={(e) => setPayloadForm({ ...payloadForm, zone: e.target.value })}
-              />
-            </label>
-
-            <label className="payload-field">
-              <span className="payload-field-label">Node ID</span>
-              <input
-                type="text"
-                className="payload-input"
-                value={payloadForm.nodeId}
-                placeholder="e.g. NODE-001"
-                onChange={(e) => setPayloadForm({ ...payloadForm, nodeId: e.target.value })}
-              />
-            </label>
-
-            <label className="payload-field">
-              <span className="payload-field-label">Sensor Category</span>
-              <select
-                className="payload-input"
-                value={payloadForm.category}
-                onChange={(e) =>
-                  setPayloadForm({ ...payloadForm, category: e.target.value as SensorCategory })
-                }
-              >
-                {SENSOR_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {humanise(cat)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <RegistrationFields state={registration} zones={zones} disabled={payloadSaving} />
 
             {payloadMessage && (
-              <div className={`payload-message payload-message-${payloadMessage.type}`}>
+              <div className={`payload-message payload-message-${payloadMessage.type}`} role="status">
                 {payloadMessage.text}
               </div>
             )}
 
             <div className="payload-actions">
               <button
-                type="button"
+                type="submit"
                 className="payload-btn payload-btn-save"
-                disabled={payloadSaving}
-                onClick={handlePayloadSave}
+                disabled={payloadSaving || !registration.isValid}
               >
-                {payloadSaving ? "Saving..." : "Save Registration"}
+                {payloadSaving ? "Saving…" : "Save Registration"}
               </button>
               <button
                 type="button"
@@ -555,7 +612,7 @@ function SensorDetailPanel({ detail, loading, onClose, onPayloadUpdated, onDetai
                 Reset
               </button>
             </div>
-          </div>
+          </form>
         )}
       </div>
 

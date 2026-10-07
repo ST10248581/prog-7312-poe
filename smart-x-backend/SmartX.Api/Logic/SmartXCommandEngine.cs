@@ -36,6 +36,7 @@
 //       https://doi.org/10.1080/00401706.1962.10490022
 // =============================================================================
 
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using SmartX.Api.Data;
 using SmartX.Api.Data.Seeding;
@@ -43,6 +44,7 @@ using SmartX.Api.Models;
 using SmartX.Api.Models.Requests;
 using SmartX.Api.Models.Responses;
 using SmartX.Api.Models.Stream;
+using SmartX.Api.Models.Validation;
 
 namespace SmartX.Api.Logic;
 
@@ -62,9 +64,9 @@ namespace SmartX.Api.Logic;
 /// <list type="bullet">
 ///   <item><description><b>Queue&lt;T&gt;</b> — routine packets are processed first-in, first-out, a budget per tick.</description></item>
 ///   <item><description><b>PriorityQueue</b> — critical packets bypass that queue and are drained at once, worst breach first.</description></item>
-///   <item><description><b>Stack&lt;T&gt;</b> — manual overrides, so undo always reverses the most recent one.</description></item>
+///   <item><description><b>Stack&lt;T&gt;</b> — manual overrides, so undo always reverses the most recent one; a second stack holds what was undone, for redo.</description></item>
 ///   <item><description><b>Dictionary</b> — the live device registry, keyed by node id and by MAC address, for O(1) lookup per packet.</description></item>
-///   <item><description><b>SortedDictionary</b> — each node's log keyed by timestamp, so a timeline reads out already in order.</description></item>
+///   <item><description><b>SortedList</b> — each node's log keyed by timestamp, so a timeline reads out already in order and a time window is found by binary search.</description></item>
 ///   <item><description><b>HashSet&lt;T&gt;</b> — active error states and disconnected nodes, so a repeat alert is recognised in O(1) and dropped.</description></item>
 /// </list>
 /// </para>
@@ -91,8 +93,12 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     /// <summary>Standard-lane packets processed per tick. The critical lane has no budget.</summary>
     private const int StandardBudgetPerTick = 20;
 
-    /// <summary>Beyond this the oldest routine packets are shed rather than letting memory grow.</summary>
-    private const int MaxStandardQueueDepth = 5_000;
+    /// <summary>
+    /// Backpressure. Beyond this the oldest routine packets are shed rather than
+    /// letting memory grow and every later packet wait longer. Sized at fifty
+    /// ticks of drain budget: a backlog older than that is stale telemetry.
+    /// </summary>
+    private const int MaxStandardQueueDepth = 1_000;
 
     /// <summary>A breach this far past the limit (as a share of the normal span) is critical.</summary>
     private const double CriticalMargin = 0.25;
@@ -148,6 +154,19 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     private const double ProblemScoreThreshold = 3.0;
     private const double DriftZScore = 2.5;
     private const int MaxSuggestions = 8;
+
+    /// <summary>How long a dismissal keeps pushing the same suggestion down the ranking.</summary>
+    private static readonly TimeSpan DismissalMemory = TimeSpan.FromMinutes(30);
+
+    /// <summary>Each dismissal multiplies the suggestion's score by this.</summary>
+    private const double DismissalPenalty = 0.4;
+
+    /// <summary>Each time a suggestion is applied its score grows by this share, up to a cap.</summary>
+    private const double AcceptanceBoost = 0.15;
+    private const int MaxAcceptanceBoosts = 4;
+
+    private const int TopRuleCount = 5;
+    private const int RecentActivityCount = 8;
 
     /// <summary>Placeholder node in a learned action, meaning "the node the condition fired on".</summary>
     private const string SelfNode = "@self";
@@ -214,6 +233,12 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     private readonly Stack<OverrideHistoryEntry> _overrideHistory = new();
 
+    /// <summary>
+    /// Overrides that were undone, most recent on top. Redo pops from here; any
+    /// new manual override clears it, as in every editor's undo/redo.
+    /// </summary>
+    private readonly Stack<OverrideHistoryEntry> _redoHistory = new();
+
     /// <summary>The commands on the stack, by id, so undo finds its target in O(1).</summary>
     private readonly Dictionary<Guid, DeviceCommand> _overrideCommands = new();
 
@@ -232,7 +257,15 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     /* ---------- Sorted sensor logs [18] ---------- */
 
-    private readonly Dictionary<string, SortedDictionary<DateTime, SensorLogEntry>> _sensorLogs = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Each node's log, keyed and kept in timestamp order. A SortedList rather
+    /// than a SortedDictionary: both keep keys sorted, but SortedList stores them
+    /// in an array, so <see cref="LowerBound"/> can binary-search straight to the
+    /// start of a time window and read forward from there — O(log n + k) for k
+    /// entries in the window — instead of walking the whole log. Readings arrive
+    /// almost entirely in time order, so inserts land at the end and stay cheap.
+    /// </summary>
+    private readonly Dictionary<string, SortedList<DateTime, SensorLogEntry>> _sensorLogs = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The last few values per node and metric — a bounded Queue&lt;T&gt; [14]
@@ -247,6 +280,9 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     private readonly HashSet<ErrorStateKey> _activeErrorStates = new();
     private readonly Dictionary<string, DateTime> _disconnectedSince = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<ErrorStateKey, ErrorStateInfo> _errorStateInfo = new();
+
+    /// <summary>Repeat "link lost" reports absorbed per disconnected node.</summary>
+    private readonly Dictionary<string, int> _disconnectRepeats = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>A few nodes misbehave more than the rest, so the live demo has recurring conditions.</summary>
     private readonly HashSet<string> _flakyNodes = new(StringComparer.OrdinalIgnoreCase);
@@ -267,6 +303,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     private long _criticalProcessed;
     private long _duplicatesSuppressed;
     private long _dropped;
+    private long _bypassedStandard;
+    private int _lastCriticalBypassed;
     private double _averageStandardWaitMs;
     private double _averageCriticalWaitMs;
 
@@ -292,6 +330,17 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     private OperatorActivity? _lastActivity;
     private long _observedActions;
     private DateTime _lastOperatorActivityUtc = DateTime.MinValue;
+
+    /* ---------- Suggestion feedback ---------- */
+
+    /// <summary>Per suggestion id: how often it was dismissed, and when last.</summary>
+    private readonly Dictionary<string, (int Count, DateTime LastUtc)> _dismissals = new();
+
+    /// <summary>Per suggestion id: how often it was applied.</summary>
+    private readonly Dictionary<string, int> _acceptances = new();
+
+    private int _suggestionsApplied;
+    private int _suggestionsDismissed;
 
     public SmartXCommandEngine(ISmartXDataStore store, SeedOptions options)
     {
@@ -721,6 +770,9 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                     RevertParameters = plan.Parameters,
                     UndoDescription = plan.Description
                 }, command);
+
+                // A new change makes whatever was undone before it unreachable.
+                _redoHistory.Clear();
             }
 
             // Every override is also something the action engine learns from.
@@ -735,20 +787,24 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         }
     }
 
-    public List<OverrideHistoryEntry> GetOverrideHistory()
+    public OverrideHistoryResponse GetOverrideHistory()
     {
         lock (_sync)
         {
             EnsureReady();
 
-            // Stack<T> enumerates from the top, so this is already most recent first.
-            return _overrideHistory.Select(entry =>
+            // Stack<T> enumerates from the top, so both lists are already most recent first.
+            return new OverrideHistoryResponse
             {
-                entry.Status = _overrideCommands.TryGetValue(entry.CommandId, out var command)
-                    ? command.Status
-                    : null;
-                return entry;
-            }).ToList();
+                Undo = _overrideHistory.Select(entry =>
+                {
+                    entry.Status = _overrideCommands.TryGetValue(entry.CommandId, out var command)
+                        ? command.Status
+                        : null;
+                    return entry;
+                }).ToList(),
+                Redo = _redoHistory.ToList()
+            };
         }
     }
 
@@ -757,13 +813,34 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     /// on the last thing issued, so pressing it twice walks back two steps in
     /// the order they were taken.
     /// </summary>
-    public (UndoResult? result, string? error) UndoLastOverride(string? issuedBy)
+    public (UndoResult? result, string? error) UndoLastOverride(string? issuedBy, Guid? expectedCommandId = null)
     {
         var operatorId = string.IsNullOrWhiteSpace(issuedBy) ? "operator" : issuedBy.Trim();
 
         lock (_sync)
         {
             EnsureReady();
+
+            // Idempotency: the client names the entry it means to undo. If that
+            // is no longer on top, a second click (or a retried request) must
+            // not go on to undo the next override down.
+            if (expectedCommandId is Guid expected &&
+                (!_overrideHistory.TryPeek(out var head) || head.CommandId != expected))
+            {
+                if (_redoHistory.TryPeek(out var alreadyUndone) && alreadyUndone.CommandId == expected)
+                {
+                    return (new UndoResult
+                    {
+                        Outcome = UndoOutcome.AlreadyUndone,
+                        Message = $"{Humanise(alreadyUndone.CommandType.ToString())} on {alreadyUndone.NodeId} was already undone. Nothing else was changed.",
+                        Undone = alreadyUndone,
+                        RemainingDepth = _overrideHistory.Count,
+                        RedoDepth = _redoHistory.Count
+                    }, null);
+                }
+
+                return (null, "The undo history changed since it was loaded, so nothing was undone. Check the stack and try again.");
+            }
 
             if (!_overrideHistory.TryPop(out var entry))
             {
@@ -798,6 +875,9 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 });
 
                 entry.Status = original.Status;
+                PushRedo(entry);
+                RecordAction(operatorId, ActionToken("undo", entry.CommandType.ToString(), entry.NodeId), entry.NodeId, now);
+
                 return (new UndoResult
                 {
                     Outcome = UndoOutcome.Cancelled,
@@ -805,7 +885,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                         ? $"{Humanise(entry.CommandType.ToString())} on {entry.NodeId} was still queued and has been cancelled."
                         : $"{Humanise(entry.CommandType.ToString())} on {entry.NodeId} {original.Status.ToString().ToLowerInvariant()} without reaching the node, so there was nothing to revert.",
                     Undone = entry,
-                    RemainingDepth = _overrideHistory.Count
+                    RemainingDepth = _overrideHistory.Count,
+                    RedoDepth = _redoHistory.Count
                 }, null);
             }
 
@@ -817,7 +898,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                     Outcome = UndoOutcome.Irreversible,
                     Message = $"{Humanise(entry.CommandType.ToString())} on {entry.NodeId} has already reached the node. {entry.UndoDescription}",
                     Undone = entry,
-                    RemainingDepth = _overrideHistory.Count
+                    RemainingDepth = _overrideHistory.Count,
+                    RedoDepth = _redoHistory.Count
                 }, null);
             }
 
@@ -837,14 +919,124 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 CommandPriority.Immediate, $"{operatorId} (undo)", dryRun: false, now);
 
             entry.Status = original?.Status;
+            PushRedo(entry);
+            RecordAction(operatorId, ActionToken("undo", entry.CommandType.ToString(), entry.NodeId), entry.NodeId, now);
+
             return (new UndoResult
             {
                 Outcome = UndoOutcome.Reverted,
                 Message = $"{entry.UndoDescription}: sent to {entry.NodeId} at Immediate priority.",
                 Undone = entry,
                 RevertCommand = revert,
-                RemainingDepth = _overrideHistory.Count
+                RemainingDepth = _overrideHistory.Count,
+                RedoDepth = _redoHistory.Count
             }, null);
+        }
+    }
+
+    /// <summary>
+    /// Re-applies the most recently undone override: the same command, sent
+    /// again, which goes back on the undo stack with a fresh revert plan. Like
+    /// undo it is idempotent when the client names the entry it expects.
+    /// </summary>
+    public (RedoResult? result, string? error) RedoLastUndo(string? issuedBy, Guid? expectedCommandId = null)
+    {
+        var operatorId = string.IsNullOrWhiteSpace(issuedBy) ? "operator" : issuedBy.Trim();
+
+        lock (_sync)
+        {
+            EnsureReady();
+
+            if (expectedCommandId is Guid expected &&
+                (!_redoHistory.TryPeek(out var head) || head.CommandId != expected))
+            {
+                if (_overrideHistory.TryPeek(out var top) && top.RedoOf == expected)
+                {
+                    return (new RedoResult
+                    {
+                        Outcome = RedoOutcome.AlreadyRedone,
+                        Message = $"{Humanise(top.CommandType.ToString())} on {top.NodeId} was already redone. Nothing else was changed.",
+                        Redone = top,
+                        UndoDepth = _overrideHistory.Count,
+                        RedoDepth = _redoHistory.Count
+                    }, null);
+                }
+
+                return (null, "The redo history changed since it was loaded, so nothing was redone. Check the stack and try again.");
+            }
+
+            if (!_redoHistory.TryPeek(out var entry))
+            {
+                return (null, "There is nothing to redo.");
+            }
+
+            if (!_devicesByNode.TryGetValue(entry.NodeId, out var sensor) || !IsReachable(sensor))
+            {
+                return (null, $"{entry.NodeId} is offline, so the override cannot be re-applied. It stays on the redo stack.");
+            }
+
+            var invalid = ValidateParameters(sensor, entry.CommandType, entry.Parameters);
+            if (invalid is not null)
+            {
+                return (null, invalid);
+            }
+
+            _redoHistory.Pop();
+            var now = DateTime.UtcNow;
+
+            // Planned against the node as it is now, which is what a later undo restores.
+            var plan = PlanRevert(sensor, entry.CommandType, entry.Parameters);
+            var command = IssueCommand(
+                sensor, entry.CommandType, entry.Parameters, CommandOrigin.Manual,
+                entry.Priority, $"{operatorId} (redo)", dryRun: false, now);
+
+            var redone = new OverrideHistoryEntry
+            {
+                CommandId = command.Id,
+                NodeId = sensor.NodeId,
+                SensorName = sensor.Name,
+                CommandType = command.CommandType,
+                Parameters = command.Parameters,
+                Priority = command.Priority,
+                IssuedBy = operatorId,
+                IssuedUtc = now,
+                RevertCommandType = plan.CommandType,
+                RevertParameters = plan.Parameters,
+                UndoDescription = plan.Description,
+                RedoOf = entry.CommandId
+            };
+
+            PushOverride(redone, command);
+
+            // A redo is the operator choosing that action again: it teaches the engine the same way.
+            RecordAction(operatorId, ActionToken("command", entry.CommandType.ToString(), sensor.NodeId), sensor.NodeId, now);
+
+            return (new RedoResult
+            {
+                Outcome = RedoOutcome.Redone,
+                Message = $"{Humanise(entry.CommandType.ToString())} {entry.Parameters} re-queued for {entry.NodeId}.",
+                Redone = redone,
+                Command = command,
+                UndoDepth = _overrideHistory.Count,
+                RedoDepth = _redoHistory.Count
+            }, null);
+        }
+    }
+
+    /// <summary>Pushes an undone override onto the redo stack, keeping it to the same cap. Caller holds the lock.</summary>
+    private void PushRedo(OverrideHistoryEntry entry)
+    {
+        _redoHistory.Push(entry);
+        if (_redoHistory.Count <= MaxUndoDepth)
+        {
+            return;
+        }
+
+        var kept = _redoHistory.Take(MaxUndoDepth).ToList();
+        _redoHistory.Clear();
+        for (var index = kept.Count - 1; index >= 0; index--)
+        {
+            _redoHistory.Push(kept[index]);
         }
     }
 
@@ -1120,6 +1312,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         lock (_sync)
         {
             EnsureReady();
+            var droppedBefore = _dropped;
+            var bypassedBefore = _bypassedStandard;
 
             foreach (var request in packets)
             {
@@ -1157,12 +1351,14 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             // next tick, it is emptied here, ahead of everything already queued.
             result.CriticalAlerts = DrainCriticalLane();
             result.StandardQueueDepth = _standardLane.Count;
+            result.DroppedStandard = (int)(_dropped - droppedBefore);
+            result.BypassedStandard = (int)(_bypassedStandard - bypassedBefore);
         }
 
         return result;
     }
 
-    public PipelineStatus GetPipelineStatus()
+    public PipelineStatus GetPipelineStatus(IReadOnlyCollection<string>? knownDisconnected = null)
     {
         lock (_sync)
         {
@@ -1172,15 +1368,20 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             {
                 StandardQueueDepth = _standardLane.Count,
                 CriticalQueueDepth = _criticalLane.Count,
+                StandardQueueCapacity = MaxStandardQueueDepth,
+                StandardBudgetPerTick = StandardBudgetPerTick,
                 TotalReceived = _totalReceived,
                 StandardProcessed = _standardProcessed,
                 CriticalProcessed = _criticalProcessed,
+                BypassedStandard = _bypassedStandard,
+                LastCriticalBypassed = _lastCriticalBypassed,
                 DuplicatesSuppressed = _duplicatesSuppressed,
                 Dropped = _dropped,
                 AverageStandardWaitMs = Math.Round(_averageStandardWaitMs, 1),
                 AverageCriticalWaitMs = Math.Round(_averageCriticalWaitMs, 1),
                 RegisteredDevices = _devicesByNode.Count,
                 UndoDepth = _overrideHistory.Count,
+                RedoDepth = _redoHistory.Count,
                 DisconnectedNodes = _disconnectedNodes
                     .Select(nodeId =>
                     {
@@ -1190,7 +1391,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                             NodeId = nodeId,
                             SensorName = device?.Name ?? string.Empty,
                             Zone = device?.Zone ?? string.Empty,
-                            SinceUtc = _disconnectedSince.TryGetValue(nodeId, out var since) ? since : null
+                            SinceUtc = _disconnectedSince.TryGetValue(nodeId, out var since) ? since : null,
+                            SuppressedCount = _disconnectRepeats.GetValueOrDefault(nodeId)
                         };
                     })
                     // Most recent drop first: that is the one still worth reacting to.
@@ -1204,15 +1406,63 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                         ReadingType = pair.Key.ReadingType,
                         Direction = pair.Value.Direction,
                         Severity = pair.Value.Severity,
-                        SinceUtc = pair.Value.SinceUtc
+                        SinceUtc = pair.Value.SinceUtc,
+                        SuppressedCount = pair.Value.Suppressed
                     })
                     .OrderByDescending(state => state.Severity)
                     .ThenByDescending(state => state.SinceUtc)
                     .ToList(),
+                SetChanges = CompareDisconnected(knownDisconnected),
                 RecentAlerts = _recentAlerts.Reverse().ToList(),
                 GeneratedUtc = DateTime.UtcNow
             };
         }
+    }
+
+    /// <summary>
+    /// Set algebra over the disconnected nodes [19]. The caller sends the set it
+    /// saw on its last poll; the differences are what is new to it. Every
+    /// operation is O(n) over the smaller sets with O(1) membership tests, and
+    /// nothing has to be kept per client on the server. Caller holds the lock.
+    /// </summary>
+    private PipelineSetChanges CompareDisconnected(IReadOnlyCollection<string>? knownDisconnected)
+    {
+        var changes = new PipelineSetChanges();
+
+        // Needs attention = disconnected ∪ nodes with a critical open breach.
+        var attention = new HashSet<string>(_disconnectedNodes, StringComparer.OrdinalIgnoreCase);
+        attention.UnionWith(_errorStateInfo
+            .Where(pair => pair.Value.Severity == AlertSeverity.Critical)
+            .Select(pair => pair.Key.NodeId));
+        changes.NeedsAttention = attention.Order(StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (knownDisconnected is null)
+        {
+            return changes;
+        }
+
+        // A client whose previous set was empty sends one blank entry, so it still gets a comparison.
+        var known = new HashSet<string>(
+            knownDisconnected.Where(nodeId => !string.IsNullOrWhiteSpace(nodeId)),
+            StringComparer.OrdinalIgnoreCase);
+
+        // Newly disconnected = current \ known.
+        var newly = new HashSet<string>(_disconnectedNodes, StringComparer.OrdinalIgnoreCase);
+        newly.ExceptWith(known);
+
+        // Recovered = known \ current.
+        var recovered = new HashSet<string>(known, StringComparer.OrdinalIgnoreCase);
+        recovered.ExceptWith(_disconnectedNodes);
+
+        // Still down = current ∩ known.
+        var still = new HashSet<string>(_disconnectedNodes, StringComparer.OrdinalIgnoreCase);
+        still.IntersectWith(known);
+
+        changes.Compared = true;
+        changes.NewlyDisconnected = newly.Order(StringComparer.OrdinalIgnoreCase).ToList();
+        changes.Recovered = recovered.Order(StringComparer.OrdinalIgnoreCase).ToList();
+        changes.StillDisconnected = still.Count;
+        return changes;
     }
 
     /// <summary>Resolves a device by node id first, then MAC address. Caller holds the lock.</summary>
@@ -1223,7 +1473,10 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             return byNode;
         }
 
-        if (!string.IsNullOrWhiteSpace(macAddress) && _devicesByMac.TryGetValue(macAddress.Trim(), out var byMac))
+        // MAC keys are stored canonical (upper case, colon separated), so
+        // "5c-a1-..." and "5C:A1:..." reach the same entry.
+        if (!string.IsNullOrWhiteSpace(macAddress) &&
+            _devicesByMac.TryGetValue(MacAddress.Normalise(macAddress) ?? macAddress.Trim(), out var byMac))
         {
             return byMac;
         }
@@ -1324,6 +1577,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         if (!packet.LinkUp && _disconnectedNodes.Contains(packet.NodeId))
         {
             _duplicatesSuppressed++;
+            _disconnectRepeats[packet.NodeId] = _disconnectRepeats.GetValueOrDefault(packet.NodeId) + 1;
             return IntakeOutcome.Suppressed;
         }
 
@@ -1356,6 +1610,11 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
         while (_criticalLane.TryDequeue(out var packet, out _))
         {
+            // Everything still in the standard queue arrived before or alongside
+            // this packet, and is now being overtaken by it.
+            _lastCriticalBypassed = _standardLane.Count;
+            _bypassedStandard += _standardLane.Count;
+
             var alert = Process(packet);
             if (alert is not null)
             {
@@ -1415,6 +1674,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             if (!_disconnectedNodes.Add(nodeId))
             {
                 _duplicatesSuppressed++;
+                _disconnectRepeats[nodeId] = _disconnectRepeats.GetValueOrDefault(nodeId) + 1;
                 return null;
             }
 
@@ -1429,6 +1689,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         if (_disconnectedNodes.Remove(nodeId))
         {
             _disconnectedSince.Remove(nodeId);
+            _disconnectRepeats.Remove(nodeId);
             AppendLog(nodeId, new SensorLogEntry
             {
                 TimestampUtc = packet.TimestampUtc,
@@ -1493,6 +1754,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         {
             // Same breach, still going. The reading is logged above; the alert is not repeated.
             _duplicatesSuppressed++;
+            _errorStateInfo[key] = _errorStateInfo[key] with { Suppressed = _errorStateInfo[key].Suppressed + 1 };
         }
 
         if (alert is not null && severity == AlertSeverity.Critical)
@@ -1602,6 +1864,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         SensorProfile device;
         List<SensorLogEntry> entries;
         int logSize;
+        var skipped = 0;
+        TimeSpan rangeRead;
         bool disconnected;
         var limits = new Dictionary<ReadingType, LimitSet>();
 
@@ -1617,16 +1881,20 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             device = found;
             disconnected = _disconnectedNodes.Contains(device.NodeId);
 
+            var started = Stopwatch.GetTimestamp();
+
             if (_sensorLogs.TryGetValue(device.NodeId, out var log))
             {
                 logSize = log.Count;
-                entries = new List<SensorLogEntry>();
-                foreach (var (timestamp, entry) in log)
+
+                // Range read: binary-search to the first entry inside the window,
+                // then copy forward. Older entries are skipped without being visited.
+                skipped = LowerBound(log, from);
+                var values = log.Values;
+                entries = new List<SensorLogEntry>(log.Count - skipped);
+                for (var index = skipped; index < values.Count; index++)
                 {
-                    if (timestamp >= from)
-                    {
-                        entries.Add(entry);
-                    }
+                    entries.Add(values[index]);
                 }
             }
             else
@@ -1634,6 +1902,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 logSize = 0;
                 entries = new List<SensorLogEntry>();
             }
+
+            rangeRead = Stopwatch.GetElapsedTime(started);
 
             foreach (var readingType in ReadingTypeProfile.ForCategory(device.Category))
             {
@@ -1673,6 +1943,9 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             ToUtc = now,
             LogSize = logSize,
             IsDisconnected = disconnected,
+            EntriesInWindow = entries.Count,
+            EntriesSkipped = skipped,
+            RangeReadMicroseconds = Math.Round(rangeRead.TotalMicroseconds, 2),
             Series = series,
             Events = events.Skip(Math.Max(0, events.Count - MaxTimelineEvents)).ToList()
         };
@@ -1698,52 +1971,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
             foreach (var device in _devicesById.Values)
             {
-                var readings = new List<LiveReading>();
-                DateTime? lastReading = null;
-
-                foreach (var readingType in ReadingTypeProfile.ForCategory(device.Category))
-                {
-                    var limits = Limits(device.Id, readingType);
-                    var reading = new LiveReading
-                    {
-                        ReadingType = readingType,
-                        Unit = ReadingTypeProfile.For(readingType).Unit,
-                        MinThreshold = limits.IsBoolean ? null : limits.Min,
-                        MaxThreshold = limits.IsBoolean ? null : limits.Max,
-                        IsBoolean = limits.IsBoolean
-                    };
-
-                    // One hash probe for the node's window on this metric.
-                    if (_recentReadings.TryGetValue((device.NodeId, readingType), out var recent) && recent.Count > 0)
-                    {
-                        var latest = recent.Last();
-                        reading.Value = latest.Value;
-                        reading.TimestampUtc = latest.TimestampUtc;
-                        reading.OutOfRange = !limits.IsBoolean && (latest.Value < limits.Min || latest.Value > limits.Max);
-                        reading.Recent = recent.Select(point => point.Value).ToList();
-
-                        if (lastReading is null || latest.TimestampUtc > lastReading)
-                        {
-                            lastReading = latest.TimestampUtc;
-                        }
-                    }
-
-                    readings.Add(reading);
-                }
-
                 sensorIds[device.NodeId] = device.Id;
-                devices.Add(new LiveDevice
-                {
-                    NodeId = device.NodeId,
-                    SensorName = device.Name,
-                    MacAddress = device.MacAddress,
-                    Category = device.Category,
-                    Zone = device.Zone,
-                    Room = device.Room,
-                    IsDisconnected = !IsReachable(device),
-                    LastReadingUtc = lastReading,
-                    Readings = readings
-                });
+                devices.Add(BuildLiveDevice(device));
             }
         }
 
@@ -1786,6 +2015,124 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 state => state.ToString(),
                 state => forAlertCounts.Count(device => device.AlertState == state)),
             GeneratedUtc = now
+        };
+    }
+
+    /// <summary>
+    /// Exact lookup by node id, then by MAC address, against the registry
+    /// dictionaries [17]. The probes are timed on their own, so the panel can
+    /// show that finding one device in the registry costs the same however
+    /// many are registered.
+    /// </summary>
+    public DeviceLookupResult LookupDevice(string key)
+    {
+        var trimmed = key?.Trim() ?? string.Empty;
+        var result = new DeviceLookupResult { Key = trimmed, NormalisedKey = trimmed };
+        Dictionary<Guid, NodeAlertContext> liveContexts;
+        LiveDevice liveDevice;
+        Guid sensorId;
+
+        lock (_sync)
+        {
+            EnsureReady();
+
+            var started = Stopwatch.GetTimestamp();
+            SensorProfile? device = null;
+
+            if (_devicesByNode.TryGetValue(trimmed, out var byNode))
+            {
+                device = byNode;
+                result.MatchedBy = "NodeId";
+                result.NormalisedKey = byNode.NodeId;
+                result.RegistrySize = _devicesByNode.Count;
+            }
+            else if (MacAddress.Normalise(trimmed) is string mac)
+            {
+                result.NormalisedKey = mac;
+                result.RegistrySize = _devicesByMac.Count;
+                if (_devicesByMac.TryGetValue(mac, out var byMac))
+                {
+                    device = byMac;
+                    result.MatchedBy = "MacAddress";
+                }
+            }
+            else
+            {
+                result.RegistrySize = _devicesByNode.Count;
+            }
+
+            result.ElapsedMicroseconds = Math.Round(Stopwatch.GetElapsedTime(started).TotalMicroseconds, 3);
+            result.Found = device is not null;
+
+            if (device is null)
+            {
+                return result;
+            }
+
+            liveDevice = BuildLiveDevice(device);
+            sensorId = device.Id;
+            liveContexts = BuildLiveAlertContexts();
+        }
+
+        // Same alert picture as the live panel, worked out outside the lock as there.
+        var context = BuildAlertContexts(liveContexts).TryGetValue(sensorId, out var found)
+            ? found
+            : NodeAlertContext.None;
+
+        liveDevice.AlertState = context.State;
+        liveDevice.AlertSeverity = context.Severity;
+        liveDevice.OpenAlertCount = context.OpenCount;
+        result.Device = liveDevice;
+        return result;
+    }
+
+    /// <summary>One device's live card: latest value and trail per metric. Caller holds the lock.</summary>
+    private LiveDevice BuildLiveDevice(SensorProfile device)
+    {
+        var readings = new List<LiveReading>();
+        DateTime? lastReading = null;
+
+        foreach (var readingType in ReadingTypeProfile.ForCategory(device.Category))
+        {
+            var limits = Limits(device.Id, readingType);
+            var reading = new LiveReading
+            {
+                ReadingType = readingType,
+                Unit = ReadingTypeProfile.For(readingType).Unit,
+                MinThreshold = limits.IsBoolean ? null : limits.Min,
+                MaxThreshold = limits.IsBoolean ? null : limits.Max,
+                IsBoolean = limits.IsBoolean
+            };
+
+            // One hash probe for the node's window on this metric.
+            if (_recentReadings.TryGetValue((device.NodeId, readingType), out var recent) && recent.Count > 0)
+            {
+                var latest = recent.Last();
+                reading.Value = latest.Value;
+                reading.TimestampUtc = latest.TimestampUtc;
+                reading.OutOfRange = !limits.IsBoolean && (latest.Value < limits.Min || latest.Value > limits.Max);
+                reading.Recent = recent.Select(point => point.Value).ToList();
+
+                if (lastReading is null || latest.TimestampUtc > lastReading)
+                {
+                    lastReading = latest.TimestampUtc;
+                }
+            }
+
+            readings.Add(reading);
+        }
+
+        return new LiveDevice
+        {
+            NodeId = device.NodeId,
+            SensorName = device.Name,
+            MacAddress = device.MacAddress,
+            Category = device.Category,
+            Zone = device.Zone,
+            Room = device.Room,
+            IsDisconnected = !IsReachable(device),
+            LastReadingUtc = lastReading,
+            Readings = readings
         };
     }
 
@@ -1837,7 +2184,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     {
         if (!_sensorLogs.TryGetValue(nodeId, out var log))
         {
-            log = new SortedDictionary<DateTime, SensorLogEntry>();
+            log = new SortedList<DateTime, SensorLogEntry>();
             _sensorLogs[nodeId] = log;
         }
 
@@ -1854,14 +2201,40 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         var cutoff = DateTime.UtcNow.AddHours(-LogRetentionHours);
         while (log.Count > 0)
         {
-            var oldest = log.Keys.First();
-            if (log.Count <= MaxLogEntriesPerNode && oldest >= cutoff)
+            if (log.Count <= MaxLogEntriesPerNode && log.Keys[0] >= cutoff)
             {
                 break;
             }
 
-            log.Remove(oldest);
+            log.RemoveAt(0);
         }
+    }
+
+    /// <summary>
+    /// Index of the first entry at or after <paramref name="from"/>, by binary
+    /// search over the sorted keys: O(log n). Everything before it is older than
+    /// the window and is never touched.
+    /// </summary>
+    private static int LowerBound(SortedList<DateTime, SensorLogEntry> log, DateTime from)
+    {
+        var keys = log.Keys;
+        var low = 0;
+        var high = keys.Count;
+
+        while (low < high)
+        {
+            var middle = low + (high - low) / 2;
+            if (keys[middle] < from)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+
+        return low;
     }
 
     /// <summary>
@@ -2315,6 +2688,19 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 return;
             }
 
+            if (request.Kind == OperatorActivityKind.Filter)
+            {
+                // "facet:value", e.g. "zone:Zone B". Kept as typed; the token
+                // separator is the only character that cannot appear in it.
+                var filter = value.Replace('|', '/');
+                if (filter.Contains(':'))
+                {
+                    RecordAction(issuedBy, ActionToken("filter", filter, null), null, now);
+                }
+
+                return;
+            }
+
             // A search that names a node — by id or by name — is about that
             // node, which is what lets the engine connect it to the node's alerts.
             var named = ResolveDevice(value, null)
@@ -2354,6 +2740,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
             AddNextStepSuggestions(candidates, issuedBy, now);
             AddProblemDeviceSuggestions(candidates, now);
+            ApplyFeedback(candidates.Values, now);
 
             // Top-k by score with a min-heap of size k: each candidate costs
             // O(log k), and the weakest of the kept set is always the one evicted.
@@ -2381,10 +2768,159 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 ObservedActions = (int)_observedActions,
                 LearnedAssociations = _associations.Values.Sum(actions => actions.Count),
                 ActiveTriggers = triggers.Count,
+                Learning = BuildLearningStats(issuedBy),
                 GeneratedUtc = now
             };
         }
     }
+
+    /// <summary>
+    /// Records what the operator did with a suggestion. A dismissal pushes that
+    /// suggestion down the ranking for a while; an application lifts it. The
+    /// action an application performs (a dispatch, a search, a filter) is
+    /// recorded by its own endpoint, so the habit is learned there.
+    /// </summary>
+    public void RecordSuggestionFeedback(SuggestionFeedbackRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SuggestionId))
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            EnsureReady();
+            var id = request.SuggestionId.Trim();
+
+            if (request.Outcome == SuggestionFeedback.Applied)
+            {
+                _suggestionsApplied++;
+                _acceptances[id] = _acceptances.GetValueOrDefault(id) + 1;
+
+                // Applying it settles any earlier dismissal.
+                _dismissals.Remove(id);
+            }
+            else
+            {
+                _suggestionsDismissed++;
+                var previous = _dismissals.GetValueOrDefault(id);
+                _dismissals[id] = (previous.Count + 1, DateTime.UtcNow);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Forgets everything learned — rules, sequences, feedback and the activity
+    /// window — so the engine can be shown learning a habit from nothing.
+    /// </summary>
+    public void ResetLearning()
+    {
+        lock (_sync)
+        {
+            EnsureReady();
+
+            _activityWindow.Clear();
+            _triggerWindow.Clear();
+            _triggerSupport.Clear();
+            _associations.Clear();
+            _transitions.Clear();
+            _lastActionByOperator.Clear();
+            _lastActionAt.Clear();
+            _lastActivity = null;
+            _observedActions = 0;
+            _lastOperatorActivityUtc = DateTime.MinValue;
+
+            _dismissals.Clear();
+            _acceptances.Clear();
+            _suggestionsApplied = 0;
+            _suggestionsDismissed = 0;
+        }
+    }
+
+    /// <summary>Re-weights candidates by the feedback each has had. Caller holds the lock.</summary>
+    private void ApplyFeedback(IEnumerable<SuggestedAction> candidates, DateTime now)
+    {
+        foreach (var suggestion in candidates)
+        {
+            if (_dismissals.TryGetValue(suggestion.Id, out var dismissed) && now - dismissed.LastUtc <= DismissalMemory)
+            {
+                suggestion.Score *= Math.Pow(DismissalPenalty, dismissed.Count);
+                suggestion.Signals.Add(dismissed.Count == 1 ? "dismissed once, ranked lower" : $"dismissed ×{dismissed.Count}, ranked lower");
+            }
+
+            if (_acceptances.TryGetValue(suggestion.Id, out var applied))
+            {
+                suggestion.Score *= 1 + AcceptanceBoost * Math.Min(applied, MaxAcceptanceBoosts);
+                suggestion.Signals.Add(applied == 1 ? "you applied this before" : $"you applied this ×{applied}");
+            }
+        }
+    }
+
+    /// <summary>What has been learned, for the learning panel. Caller holds the lock.</summary>
+    private LearningStats BuildLearningStats(string? issuedBy)
+    {
+        var rules = new List<LearnedRule>();
+
+        foreach (var (ruleKey, actions) in _associations)
+        {
+            if (!_triggerSupport.TryGetValue(ruleKey, out var support) || support < MinRuleSupport)
+            {
+                continue;
+            }
+
+            var split = ruleKey.IndexOf('|');
+            var node = ruleKey[..split];
+            var trigger = new ActiveTrigger(node, ruleKey[(split + 1)..], DateTime.MinValue, AlertSeverity.Warning);
+            var condition = node == "*" ? DescribeGeneralCondition(trigger) : DescribeCondition(trigger);
+
+            foreach (var (token, count) in actions)
+            {
+                var confidence = count / (double)support;
+                if (count < MinRuleCount || confidence < MinRuleConfidence)
+                {
+                    continue;
+                }
+
+                rules.Add(new LearnedRule
+                {
+                    Condition = condition,
+                    Action = PastTense(token),
+                    Count = count,
+                    Support = support,
+                    Confidence = Math.Round(confidence, 2)
+                });
+            }
+        }
+
+        var operatorId = string.IsNullOrWhiteSpace(issuedBy) ? null : issuedBy.Trim();
+        var feedback = _suggestionsApplied + _suggestionsDismissed;
+
+        return new LearningStats
+        {
+            RulesLearned = rules.Count,
+            TransitionsLearned = _transitions.Values.Sum(followers => followers.Count),
+            TopRules = rules
+                .OrderByDescending(rule => rule.Confidence * Math.Log2(2 + rule.Count))
+                .Take(TopRuleCount)
+                .ToList(),
+            Applied = _suggestionsApplied,
+            Dismissed = _suggestionsDismissed,
+            AcceptanceRate = feedback == 0 ? null : Math.Round(_suggestionsApplied / (double)feedback, 2),
+            RecentActivity = _activityWindow
+                .Reverse()
+                .Where(activity => operatorId is null || string.Equals(activity.Operator, operatorId, StringComparison.OrdinalIgnoreCase))
+                .Take(RecentActivityCount)
+                .Select(activity => new ActivityEntry
+                {
+                    Description = Capitalise(PastTense(activity.Token)),
+                    AtUtc = activity.AtUtc
+                })
+                .ToList()
+        };
+    }
+
+    private static string Capitalise(string value) =>
+        value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..];
 
     /// <summary>
     /// Association-rule suggestions for one active condition. A rule
@@ -2570,12 +3106,10 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                 var flaps = 0;
                 var outOfRange = 0;
 
-                foreach (var (timestamp, entry) in log)
+                var values = log.Values;
+                for (var index = LowerBound(log, readingCutoff); index < values.Count; index++)
                 {
-                    if (timestamp < readingCutoff)
-                    {
-                        continue;
-                    }
+                    var entry = values[index];
 
                     if (entry.Kind == SensorLogKind.Disconnected)
                     {
@@ -2689,7 +3223,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     private static void AddCandidate(Dictionary<string, SuggestedAction> candidates, SuggestedAction suggestion)
     {
-        var key = $"{suggestion.NodeId}|{suggestion.CommandType}|{suggestion.SearchTerm}";
+        var key = $"{suggestion.NodeId}|{suggestion.CommandType}|{suggestion.SearchTerm}|{suggestion.FilterFacet}:{suggestion.FilterValue}";
         suggestion.Id = string.IsNullOrEmpty(suggestion.Id) ? $"{suggestion.Kind}:{key}" : suggestion.Id;
 
         if (!candidates.TryGetValue(key, out var existing) || suggestion.Score > existing.Score)
@@ -2759,6 +3293,24 @@ public class SmartXCommandEngine : ISmartXCommandEngine
                     NodeId = device.NodeId,
                     SensorName = device.Name
                 };
+
+            case "filter":
+            {
+                var separator = detail.IndexOf(':');
+                if (separator <= 0 || separator == detail.Length - 1)
+                {
+                    return null;
+                }
+
+                var facet = detail[..separator];
+                var filterValue = detail[(separator + 1)..];
+                return new SuggestedAction
+                {
+                    Title = $"Filter to {Humanise(filterValue)} ({Humanise(facet).ToLowerInvariant()})",
+                    FilterFacet = facet,
+                    FilterValue = filterValue
+                };
+            }
 
             default:
                 return null;
@@ -2946,6 +3498,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             "command" => $"sent {Humanise(detail)} to {nodeId}",
             "search" => $"searched for \"{(detail.Length == 0 ? nodeId : detail)}\"",
             "select" => $"inspected {nodeId}",
+            "filter" => $"filtered by {detail.Replace(":", " ")}",
+            "undo" => $"undid {Humanise(detail)} on {nodeId}",
             _ => "acted"
         };
     }
@@ -3113,9 +3667,11 @@ public class SmartXCommandEngine : ISmartXCommandEngine
             _devicesByNode[device.NodeId] = device;
             _devicesById[device.Id] = device;
 
-            if (!string.IsNullOrWhiteSpace(device.MacAddress))
+            // Keyed in canonical form, so one device never sits under two notations.
+            var macKey = MacAddress.Normalise(device.MacAddress) ?? device.MacAddress?.Trim();
+            if (!string.IsNullOrWhiteSpace(macKey))
             {
-                _devicesByMac[device.MacAddress] = device;
+                _devicesByMac[macKey] = device;
             }
         }
 
@@ -3365,7 +3921,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     /// </summary>
     private readonly record struct ErrorStateKey(string NodeId, AlertType AlertType, ReadingType ReadingType);
 
-    private sealed record ErrorStateInfo(DateTime SinceUtc, AlertSeverity Severity, BreachDirection Direction);
+    /// <summary>When an error state opened, how bad it is, and how many repeats of it were absorbed.</summary>
+    private sealed record ErrorStateInfo(DateTime SinceUtc, AlertSeverity Severity, BreachDirection Direction, int Suppressed = 0);
 
     private readonly record struct LimitSet(double Min, double Max, AlertSeverity Severity, bool IsBoolean);
 

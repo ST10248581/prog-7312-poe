@@ -19,30 +19,32 @@ public class TelemetryController : ControllerBase
 
     /// <summary>Overview first: whole-ecosystem health in a single payload.</summary>
     [HttpGet("summary")]
-    public IActionResult GetSummary()
+    public async Task<IActionResult> GetSummary(CancellationToken cancellationToken)
     {
-        return Ok(_telemetryService.GetSummary());
+        return Ok(await _telemetryService.GetSummaryAsync(cancellationToken));
     }
 
     /// <summary>The live chart for one sensor, with its threshold markers.</summary>
     [HttpGet("series/{sensorProfileId:guid}")]
-    public IActionResult GetSeries(
+    public async Task<IActionResult> GetSeries(
         Guid sensorProfileId,
+        CancellationToken cancellationToken,
         [FromQuery] int hours = 24,
         [FromQuery] int maxPoints = DefaultSeriesMaxPoints)
     {
-        return Ok(_telemetryService.GetSeries(sensorProfileId, hours, maxPoints));
+        return Ok(await _telemetryService.GetSeriesAsync(sensorProfileId, hours, maxPoints, cancellationToken));
     }
 
     /// <summary>Paged raw readings, for the investigate step.</summary>
     [HttpGet("readings")]
-    public IActionResult GetReadings(
+    public async Task<IActionResult> GetReadings(
         [FromQuery] List<Guid>? sensorProfileIds,
         [FromQuery] List<SensorCategory>? categories,
         [FromQuery] List<SensorStatus>? statuses,
         [FromQuery] List<string>? zones,
         [FromQuery] DateTime? fromUtc,
         [FromQuery] DateTime? toUtc,
+        CancellationToken cancellationToken,
         [FromQuery] bool anomaliesOnly = false,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50)
@@ -60,6 +62,6 @@ public class TelemetryController : ControllerBase
             PageSize = pageSize
         };
 
-        return Ok(_telemetryService.GetReadings(query));
+        return Ok(await _telemetryService.GetReadingsAsync(query, cancellationToken));
     }
 }

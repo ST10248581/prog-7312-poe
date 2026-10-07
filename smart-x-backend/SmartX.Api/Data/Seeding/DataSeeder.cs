@@ -52,6 +52,9 @@ public class DataSeeder : IDataSeeder
         _sensorAttachmentSeeder.Seed();
         _ingestionBatchSeeder.Seed();
         _engagementStateSeeder.Seed();
+
+        // The seeders write the tables directly; index them once at the end.
+        _store.RebuildIndexes();
         _commandSeeder.Seed();
 
         _logger.LogInformation(

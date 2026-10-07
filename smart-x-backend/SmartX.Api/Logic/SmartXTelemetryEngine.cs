@@ -36,8 +36,12 @@
 // =============================================================================
 
 using System.Diagnostics;
+using System.Security.Cryptography;
+using Microsoft.Extensions.Options;
+using SmartX.Api.Configuration;
 using SmartX.Api.Data;
 using SmartX.Api.Data.Seeding;
+using SmartX.Api.Logic.Attachments;
 using SmartX.Api.Models;
 using SmartX.Api.Models.Requests;
 using SmartX.Api.Models.Responses;
@@ -87,133 +91,302 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     private readonly ITelemetryRepository _telemetryRepository;
     private readonly IAlertRepository _alertRepository;
     private readonly IEngagementRepository _engagementRepository;
+    private readonly AttachmentCipher _attachmentCipher;
+    private readonly AttachmentOptions _attachmentOptions;
+    private readonly ILogger<SmartXTelemetryEngine> _logger;
 
     public SmartXTelemetryEngine(
         ISensorProfileRepository sensorProfileRepository,
         ITelemetryRepository telemetryRepository,
         IAlertRepository alertRepository,
-        IEngagementRepository engagementRepository)
+        IEngagementRepository engagementRepository,
+        AttachmentCipher attachmentCipher,
+        IOptions<AttachmentOptions> attachmentOptions,
+        ILogger<SmartXTelemetryEngine> logger)
     {
         _sensorProfileRepository = sensorProfileRepository;
         _telemetryRepository = telemetryRepository;
         _alertRepository = alertRepository;
         _engagementRepository = engagementRepository;
+        _attachmentCipher = attachmentCipher;
+        _attachmentOptions = attachmentOptions.Value;
+        _logger = logger;
     }
 
     // =====================================================================
     // Sensors
+    // The store is in memory, so reads complete synchronously and are returned
+    // as completed tasks; the async signature is the contract a database-backed
+    // repository would need. The attachment upload and download are genuinely
+    // asynchronous: they stream the file through the cipher.
     // =====================================================================
 
-    public List<SensorListItem> GetSensors(TelemetryQuery query)
+    public Task<List<SensorListItem>> GetSensorsAsync(TelemetryQuery query, CancellationToken cancellationToken = default)
     {
-        return _sensorProfileRepository.GetAll(query);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_sensorProfileRepository.GetAll(query));
     }
 
-    public SensorDetail? GetSensorDetail(Guid id)
+    public Task<SensorDetail?> GetSensorDetailAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var detail = _sensorProfileRepository.GetDetail(id);
-        if (detail is null)
+        if (detail is not null)
         {
-            return null;
+            detail.Series = _telemetryRepository.GetSeries(
+                id,
+                DateTime.UtcNow.AddHours(-24),
+                DetailSeriesMaxPoints);
         }
 
-        detail.Series = _telemetryRepository.GetSeries(
-            id,
-            DateTime.UtcNow.AddHours(-24),
-            DetailSeriesMaxPoints);
-
-        return detail;
+        return Task.FromResult(detail);
     }
 
-    public FilterOptions GetFilterOptions()
+    public Task<FilterOptions> GetFilterOptionsAsync(CancellationToken cancellationToken = default)
     {
-        return _sensorProfileRepository.GetFilterOptions();
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_sensorProfileRepository.GetFilterOptions());
     }
 
-    public SensorProfile? UpdateSensorPayload(Guid id, UpdateSensorPayloadRequest request)
+    public Task<WriteResult<SensorProfile>> UpdateSensorPayloadAsync(
+        Guid id,
+        UpdateSensorPayloadRequest request,
+        CancellationToken cancellationToken = default)
     {
-        return _sensorProfileRepository.UpdatePayload(id, request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_sensorProfileRepository.GetById(id) is null)
+        {
+            return Task.FromResult(WriteResult<SensorProfile>.Missing());
+        }
+
+        var conflict = FindIdentityConflict(request.MacAddress, request.NodeId, exceptId: id);
+        if (conflict is not null)
+        {
+            return Task.FromResult(conflict);
+        }
+
+        var updated = _sensorProfileRepository.UpdatePayload(id, request);
+        return Task.FromResult(updated is null
+            ? WriteResult<SensorProfile>.Missing()
+            : WriteResult<SensorProfile>.Ok(updated));
     }
 
-    public SensorProfile CreateSensor(CreateSensorRequest request)
+    public Task<WriteResult<SensorProfile>> CreateSensorAsync(
+        CreateSensorRequest request,
+        CancellationToken cancellationToken = default)
     {
-        return _sensorProfileRepository.Create(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var conflict = FindIdentityConflict(request.MacAddress, request.NodeId, exceptId: null);
+        if (conflict is not null)
+        {
+            return Task.FromResult(conflict);
+        }
+
+        return Task.FromResult(WriteResult<SensorProfile>.Ok(_sensorProfileRepository.Create(request)));
     }
 
-    public SensorAttachment? UploadAttachment(
+    /// <summary>
+    /// A MAC address identifies one physical radio and a node id one position in
+    /// the mesh, so neither may be shared. Both checks are O(1) dictionary
+    /// lookups, and the MAC is compared in canonical form so "5c-a1-..." and
+    /// "5C:A1:..." are recognised as the same device.
+    /// </summary>
+    private WriteResult<SensorProfile>? FindIdentityConflict(string macAddress, string nodeId, Guid? exceptId)
+    {
+        var macOwner = _sensorProfileRepository.GetByMacAddress(macAddress);
+        if (macOwner is not null && macOwner.Id != exceptId)
+        {
+            return WriteResult<SensorProfile>.Conflicting(
+                nameof(CreateSensorRequest.MacAddress),
+                $"MAC address {macOwner.MacAddress} is already registered to {macOwner.NodeId} ({macOwner.Name}).");
+        }
+
+        var nodeOwner = _sensorProfileRepository.GetByNodeId(nodeId);
+        if (nodeOwner is not null && nodeOwner.Id != exceptId)
+        {
+            return WriteResult<SensorProfile>.Conflicting(
+                nameof(CreateSensorRequest.NodeId),
+                $"Node ID {nodeOwner.NodeId} is already in use by {nodeOwner.Name}.");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Accepts an upload in one streaming pass. The declared name, type and size
+    /// are checked before anything is read; then the first bytes are sniffed for
+    /// the format's signature; then the file is read once, chunk by chunk, with
+    /// each chunk hashed (SHA-256) and encrypted (AES-256-GCM) as it passes. The
+    /// plaintext is never held in full, and the only full-size buffer is the
+    /// encrypted payload that is stored.
+    /// </summary>
+    public async Task<WriteResult<SensorAttachment>> UploadAttachmentAsync(
         Guid sensorId,
         IFormFile file,
         AttachmentType attachmentType,
-        string description)
+        string description,
+        CancellationToken cancellationToken = default)
     {
         if (_sensorProfileRepository.GetById(sensorId) is null)
         {
-            return null;
+            return WriteResult<SensorAttachment>.Missing();
         }
 
-        using var memoryStream = new MemoryStream();
-        file.CopyTo(memoryStream);
-        var fileData = memoryStream.ToArray();
+        var fileName = AttachmentPolicy.SanitiseFileName(file.FileName);
+        var (kind, declaredError) = AttachmentPolicy.CheckDeclared(
+            fileName, file.ContentType, file.Length, attachmentType, _attachmentOptions.MaxFileSizeBytes);
+
+        if (kind is null)
+        {
+            return WriteResult<SensorAttachment>.Rejected("file", declaredError!);
+        }
+
+        // Sniff the head of the file. IFormFile hands out a fresh stream over the
+        // buffered upload each time, so this read does not consume the one the
+        // cipher reads below.
+        var sniffLength = (int)Math.Min(AttachmentPolicy.SniffLength, file.Length);
+        var head = new byte[sniffLength];
+        await using (var sniffStream = file.OpenReadStream())
+        {
+            await sniffStream.ReadExactlyAsync(head, cancellationToken);
+        }
+
+        var contentError = AttachmentPolicy.CheckContent(kind, head, isWholeFile: sniffLength == file.Length);
+        if (contentError is not null)
+        {
+            return WriteResult<SensorAttachment>.Rejected("file", contentError);
+        }
+
+        var attachmentId = Guid.NewGuid();
+        SealedAttachment sealedFile;
+
+        try
+        {
+            await using var source = file.OpenReadStream();
+            sealedFile = await _attachmentCipher.EncryptAsync(attachmentId, source, file.Length, cancellationToken);
+        }
+        catch (Exception exception) when (exception is EndOfStreamException or InvalidDataException)
+        {
+            return WriteResult<SensorAttachment>.Rejected("file", "The upload was incomplete or did not match its declared size.");
+        }
 
         var attachment = new SensorAttachment
         {
-            Id = Guid.NewGuid(),
+            Id = attachmentId,
             SensorProfileId = sensorId,
-            FileName = file.FileName,
-            StoredFileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}",
-            ContentType = file.ContentType,
+            FileName = fileName,
+            StoredFileName = $"{attachmentId:N}.sxe",
+            // Served with the type from the allow-list, never the one the client claimed.
+            ContentType = kind.ContentType,
             FileSizeBytes = file.Length,
             AttachmentType = attachmentType,
             UploadedUtc = DateTime.UtcNow,
             UploadedBy = "user",
-            Description = description
+            Description = (description ?? string.Empty).Trim(),
+            Sha256 = sealedFile.Sha256,
+            IsEncrypted = true
         };
 
-        return _sensorProfileRepository.AddAttachment(sensorId, attachment, fileData);
+        return WriteResult<SensorAttachment>.Ok(
+            _sensorProfileRepository.AddAttachment(sensorId, attachment, sealedFile.Payload));
     }
 
-    public (SensorAttachment attachment, byte[] fileData)? DownloadAttachment(Guid sensorId, Guid attachmentId)
+    /// <summary>
+    /// Decrypts an attachment and checks it against the SHA-256 recorded at
+    /// upload before it is handed back. GCM already authenticates every chunk;
+    /// the hash is the end-to-end check that the file served is the file sent.
+    /// </summary>
+    public async Task<AttachmentDownload?> DownloadAttachmentAsync(
+        Guid sensorId,
+        Guid attachmentId,
+        CancellationToken cancellationToken = default)
     {
-        return _sensorProfileRepository.GetAttachmentFile(sensorId, attachmentId);
+        var stored = _sensorProfileRepository.GetAttachment(sensorId, attachmentId);
+        if (stored is null)
+        {
+            return null;
+        }
+
+        var (attachment, sealedPayload) = stored.Value;
+
+        if (sealedPayload is null)
+        {
+            // Seeded attachments describe files that were never uploaded.
+            var placeholder = System.Text.Encoding.UTF8.GetBytes(
+                $"[placeholder] {attachment.FileName} — {attachment.FileSizeBytes} bytes\n" +
+                $"Type: {attachment.AttachmentType}\n" +
+                $"Uploaded: {attachment.UploadedUtc:u}\n");
+
+            return new AttachmentDownload(attachment, new MemoryStream(placeholder), "text/plain");
+        }
+
+        var plaintext = new MemoryStream((int)attachment.FileSizeBytes);
+
+        try
+        {
+            var actualHash = await _attachmentCipher.DecryptAsync(attachmentId, sealedPayload, plaintext, cancellationToken);
+            if (!string.Equals(actualHash, attachment.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("SHA-256 mismatch.");
+            }
+        }
+        catch (Exception exception) when (exception is AuthenticationTagMismatchException or InvalidDataException)
+        {
+            _logger.LogError(exception, "Attachment {AttachmentId} failed its integrity check and was not served.", attachmentId);
+            await plaintext.DisposeAsync();
+            throw new InvalidDataException($"Attachment {attachment.FileName} failed its integrity check.", exception);
+        }
+
+        plaintext.Position = 0;
+        return new AttachmentDownload(attachment, plaintext, attachment.ContentType);
     }
 
     // =====================================================================
     // Telemetry
     // =====================================================================
 
-    public PagedResult<TelemetryReading> GetReadings(TelemetryQuery query)
+    public Task<PagedResult<TelemetryReading>> GetReadingsAsync(TelemetryQuery query, CancellationToken cancellationToken = default)
     {
-        return _telemetryRepository.Query(query);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_telemetryRepository.Query(query));
     }
 
-    public List<SensorSeries> GetSeries(Guid sensorProfileId, int hours, int maxPoints)
+    public Task<List<SensorSeries>> GetSeriesAsync(Guid sensorProfileId, int hours, int maxPoints, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var window = Math.Clamp(hours, 1, MaxSeriesWindowHours);
-        return _telemetryRepository.GetSeries(
+        return Task.FromResult(_telemetryRepository.GetSeries(
             sensorProfileId,
             DateTime.UtcNow.AddHours(-window),
-            maxPoints);
+            maxPoints));
     }
 
-    public EcosystemSummary GetSummary()
+    public Task<EcosystemSummary> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
-        return _telemetryRepository.GetSummary();
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_telemetryRepository.GetSummary());
     }
 
     // =====================================================================
     // Alerts and engagement
     // =====================================================================
 
-    public List<Alert> GetAlerts(AlertStatus? status, int take)
+    public Task<List<Alert>> GetAlertsAsync(AlertStatus? status, int take, CancellationToken cancellationToken = default)
     {
-        return _alertRepository.GetPrioritised(status, take);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_alertRepository.GetPrioritised(status, take));
     }
 
-    public EngagementState? GetEngagement(string? userId)
+    public Task<EngagementState?> GetEngagementAsync(string? userId, CancellationToken cancellationToken = default)
     {
-        return string.IsNullOrWhiteSpace(userId)
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(string.IsNullOrWhiteSpace(userId)
             ? _engagementRepository.GetPrimary()
-            : _engagementRepository.GetByUserId(userId);
+            : _engagementRepository.GetByUserId(userId));
     }
 
     // =====================================================================
@@ -237,7 +410,19 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     /// and re-copy.
     /// </para>
     /// </summary>
-    public TelemetryIngestResult? IngestHistoricalBatches(Guid sensorProfileId, IngestTelemetryRequest request)
+    public Task<TelemetryIngestResult?> IngestHistoricalBatchesAsync(
+        Guid sensorProfileId,
+        IngestTelemetryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(IngestHistoricalBatches(sensorProfileId, request, cancellationToken));
+    }
+
+    private TelemetryIngestResult? IngestHistoricalBatches(
+        Guid sensorProfileId,
+        IngestTelemetryRequest request,
+        CancellationToken cancellationToken)
     {
         var sensor = _sensorProfileRepository.GetById(sensorProfileId);
         if (sensor is null)
@@ -268,6 +453,10 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
 
         for (var batchIndex = 0; batchIndex < rawBatches.Length; batchIndex++)
         {
+            // A large flush can take a moment; stop between batches if the caller
+            // has gone, before anything has been written.
+            cancellationToken.ThrowIfCancellationRequested();
+
             var batch = rawBatches[batchIndex] ?? Array.Empty<double>();
 
             statistics[batchIndex, StatMin] = double.MaxValue;
@@ -462,7 +651,13 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     /// <see cref="SensorLoad"/> overloads operator +, which carries the unit and
     /// the meter count through the sum as well as the value.
     /// </summary>
-    public AggregateLoad GetAggregateLoad(IEnumerable<Guid> sensorProfileIds)
+    public Task<AggregateLoad> GetAggregateLoadAsync(IEnumerable<Guid> sensorProfileIds, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(GetAggregateLoad(sensorProfileIds));
+    }
+
+    private AggregateLoad GetAggregateLoad(IEnumerable<Guid> sensorProfileIds)
     {
         var contributors = new List<LoadReading>();
         var total = SensorLoad.Zero;
@@ -496,7 +691,13 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
         };
     }
 
-    public AggregateLoad GetZoneLoad(string zone)
+    public Task<AggregateLoad> GetZoneLoadAsync(string zone, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(GetZoneLoad(zone));
+    }
+
+    private AggregateLoad GetZoneLoad(string zone)
     {
         var sensorIds = _sensorProfileRepository.GetProfiles()
             .Where(profile => string.Equals(profile.Zone, zone, StringComparison.OrdinalIgnoreCase))
@@ -511,7 +712,13 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     /// Compares two meters. The delta is a subtraction and the verdict comes from
     /// the relational operators, so the intent reads directly off the code.
     /// </summary>
-    public LoadComparison? CompareLoad(Guid leftSensorId, Guid rightSensorId)
+    public Task<LoadComparison?> CompareLoadAsync(Guid leftSensorId, Guid rightSensorId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(CompareLoad(leftSensorId, rightSensorId));
+    }
+
+    private LoadComparison? CompareLoad(Guid leftSensorId, Guid rightSensorId)
     {
         var leftMeasurement = MeasureLoad(leftSensorId);
         var rightMeasurement = MeasureLoad(rightSensorId);
@@ -590,9 +797,16 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     // so nodes are tracked by identity rather than by value; see [13].
     // =====================================================================
 
-    public DeploymentValidationReport ValidateDeployment(string? zone = null)
+    public Task<DeploymentValidationReport> ValidateDeploymentAsync(string? zone = null, CancellationToken cancellationToken = default)
     {
-        return ValidateDeployment(BuildDeploymentTree(zone));
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ValidateDeployment(BuildDeploymentTree(zone)));
+    }
+
+    public Task<DeploymentValidationReport> ValidateDeploymentAsync(DeploymentNode root, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ValidateDeployment(root));
     }
 
     /// <summary>
@@ -601,7 +815,7 @@ public class SmartXTelemetryEngine : ISmartXTelemetryEngine
     /// advance - so it is walked by a method that calls itself once per child
     /// rather than by a fixed ladder of loops.
     /// </summary>
-    public DeploymentValidationReport ValidateDeployment(DeploymentNode root)
+    private DeploymentValidationReport ValidateDeployment(DeploymentNode root)
     {
         var report = new DeploymentValidationReport
         {

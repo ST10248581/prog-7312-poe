@@ -125,7 +125,7 @@ public class CommandsController : ControllerBase
     [HttpPost("overrides/undo")]
     public IActionResult UndoLastOverride([FromBody] UndoOverrideRequest? request)
     {
-        var (result, error) = _engine.UndoLastOverride(request?.IssuedBy);
+        var (result, error) = _engine.UndoLastOverride(request?.IssuedBy, request?.ExpectedCommandId);
 
         if (result is null)
         {
@@ -139,6 +139,20 @@ public class CommandsController : ControllerBase
     /// Telemetry intake: routine packets join the FIFO queue, critical ones are
     /// processed before the response is sent.
     /// </summary>
+    /// <summary>Re-applies the most recently undone override.</summary>
+    [HttpPost("overrides/redo")]
+    public IActionResult RedoLastUndo([FromBody] UndoOverrideRequest? request)
+    {
+        var (result, error) = _engine.RedoLastUndo(request?.IssuedBy, request?.ExpectedCommandId);
+
+        if (result is null)
+        {
+            return Conflict(new { error });
+        }
+
+        return Ok(result);
+    }
+
     [HttpPost("packets")]
     public IActionResult IngestPackets([FromBody] List<StreamPacketRequest> packets)
     {
@@ -152,9 +166,9 @@ public class CommandsController : ControllerBase
 
     /// <summary>Queue depths, error states, disconnected nodes and recent pipeline alerts.</summary>
     [HttpGet("pipeline")]
-    public IActionResult GetPipelineStatus()
+    public IActionResult GetPipelineStatus([FromQuery] List<string>? known)
     {
-        return Ok(_engine.GetPipelineStatus());
+        return Ok(_engine.GetPipelineStatus(known));
     }
 
     /// <summary>A node's log, in timestamp order, ready to chart.</summary>
@@ -189,6 +203,18 @@ public class CommandsController : ControllerBase
     }
 
     /// <summary>Suggested actions and automated insights for the operator.</summary>
+    /// <summary>Exact lookup by node id or MAC address, with the probe time.</summary>
+    [HttpGet("devices/lookup")]
+    public IActionResult LookupDevice([FromQuery] string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return BadRequest(new { error = "Enter a node id or MAC address." });
+        }
+
+        return Ok(_engine.LookupDevice(key));
+    }
+
     [HttpGet("insights")]
     public IActionResult GetInsights([FromQuery] string? issuedBy)
     {
@@ -196,6 +222,22 @@ public class CommandsController : ControllerBase
     }
 
     /// <summary>Records a search or node selection for the action engine to learn from.</summary>
+    /// <summary>Applied or dismissed feedback on one suggestion.</summary>
+    [HttpPost("insights/feedback")]
+    public IActionResult RecordSuggestionFeedback([FromBody] SuggestionFeedbackRequest request)
+    {
+        _engine.RecordSuggestionFeedback(request);
+        return NoContent();
+    }
+
+    /// <summary>Clears everything the engine has learned (for demonstrating learning from scratch).</summary>
+    [HttpPost("insights/reset")]
+    public IActionResult ResetLearning()
+    {
+        _engine.ResetLearning();
+        return NoContent();
+    }
+
     [HttpPost("activity")]
     public IActionResult RecordActivity([FromBody] OperatorActivityRequest request)
     {

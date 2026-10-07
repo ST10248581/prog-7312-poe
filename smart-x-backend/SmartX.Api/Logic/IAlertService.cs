@@ -4,5 +4,5 @@ namespace SmartX.Api.Logic;
 
 public interface IAlertService
 {
-    List<Alert> GetAlerts(AlertStatus? status, int take);
+    Task<List<Alert>> GetAlertsAsync(AlertStatus? status, int take, CancellationToken cancellationToken = default);
 }

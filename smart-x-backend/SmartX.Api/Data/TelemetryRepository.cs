@@ -54,7 +54,7 @@ public class TelemetryRepository : ITelemetryRepository
 
     public List<SensorSeries> GetSeries(Guid sensorProfileId, DateTime? fromUtc, int maxPoints)
     {
-        var sensor = _store.SensorProfiles.FirstOrDefault(profile => profile.Id == sensorProfileId);
+        var sensor = _store.FindSensor(sensorProfileId);
         if (sensor is null)
         {
             return new List<SensorSeries>();
@@ -63,8 +63,8 @@ public class TelemetryRepository : ITelemetryRepository
         var now = DateTime.UtcNow;
         var from = fromUtc ?? now.AddHours(-24);
 
-        var all = _store.TelemetryReadings
-            .Where(reading => reading.SensorProfileId == sensorProfileId)
+        // The per-sensor index holds only this sensor's readings.
+        var all = _store.ReadingsFor(sensorProfileId)
             .OrderBy(reading => reading.TimestampUtc)
             .ToList();
 
@@ -214,10 +214,11 @@ public class TelemetryRepository : ITelemetryRepository
 
     public TelemetryReading? GetLatest(Guid sensorProfileId, ReadingType readingType)
     {
-        return _store.TelemetryReadings
-            .Where(reading => reading.SensorProfileId == sensorProfileId && reading.ReadingType == readingType)
-            .OrderByDescending(reading => reading.TimestampUtc)
-            .FirstOrDefault();
+        // Scans only the bounded ring window, not the full reading history. The
+        // newest timestamp wins rather than the newest arrival, because a gateway
+        // can backfill older samples after newer ones.
+        return _store.RecentReadingsFor(sensorProfileId, readingType)?
+            .MaxBy(reading => reading.TimestampUtc);
     }
 
     public int AppendReadings(IReadOnlyList<TelemetryReading> readings, IngestionBatch batch)
@@ -225,13 +226,14 @@ public class TelemetryRepository : ITelemetryRepository
         foreach (var reading in readings)
         {
             reading.Id = _store.NextTelemetryReadingId();
-            _store.TelemetryReadings.Add(reading);
+            _store.AddReading(reading);
         }
 
-        _store.IngestionBatches.Add(batch);
+        // Also pushes the batch into the sensor's recent-ingest ring window.
+        _store.AddIngestionBatch(batch);
 
         // The sensor has just reported, so its liveness marker moves with it.
-        var sensor = _store.SensorProfiles.FirstOrDefault(profile => profile.Id == batch.SensorProfileId);
+        var sensor = _store.FindSensor(batch.SensorProfileId);
         if (sensor is not null && readings.Count > 0)
         {
             var newest = readings.Max(reading => reading.TimestampUtc);

@@ -1,4 +1,14 @@
-const API_BASE_URL = "http://localhost:5127/api";
+import {
+  API_BASE_URL,
+  ApiError,
+  REQUEST_TIMEOUT_MS,
+  apiFetch,
+  handleResponse,
+  toApiError,
+} from "./http";
+import { reportApiConnection } from "./apiStatus";
+
+export { ApiError } from "./http";
 
 /* ---------- Types (mirror the API response models) ---------- */
 
@@ -132,6 +142,10 @@ export interface SensorAttachment {
   uploadedUtc: string;
   uploadedBy: string;
   description: string;
+  /** Hex SHA-256 of the original file; the API re-checks it on every download. */
+  sha256: string;
+  /** True for uploads, which are stored AES-GCM encrypted. Seeded records are not. */
+  isEncrypted: boolean;
 }
 
 export interface IngestionBatch {
@@ -498,7 +512,8 @@ export interface DispatchCommandRequest {
 
 /* ---------- Command engine: undo stack ---------- */
 
-export type UndoOutcome = "Cancelled" | "Reverted" | "Irreversible";
+export type UndoOutcome = "Cancelled" | "Reverted" | "Irreversible" | "AlreadyUndone";
+export type RedoOutcome = "Redone" | "AlreadyRedone";
 
 /** One manual override on the API's undo stack. */
 export interface OverrideHistoryEntry {
@@ -515,6 +530,8 @@ export interface OverrideHistoryEntry {
   revertParameters: string | null;
   /** What undo will do, in words. */
   undoDescription: string;
+  /** Set when this entry was created by redoing an earlier one. */
+  redoOf: string | null;
   /** Current status of the original command. */
   status: CommandStatus | null;
 }
@@ -525,6 +542,22 @@ export interface UndoResult {
   undone: OverrideHistoryEntry;
   revertCommand: DeviceCommand | null;
   remainingDepth: number;
+  redoDepth: number;
+}
+
+export interface RedoResult {
+  outcome: RedoOutcome;
+  message: string;
+  redone: OverrideHistoryEntry | null;
+  command: DeviceCommand | null;
+  undoDepth: number;
+  redoDepth: number;
+}
+
+/** Both stacks, top first. */
+export interface OverrideHistory {
+  undo: OverrideHistoryEntry[];
+  redo: OverrideHistoryEntry[];
 }
 
 /* ---------- Command engine: telemetry intake ---------- */
@@ -557,6 +590,8 @@ export interface DisconnectedNode {
   sensorName: string;
   zone: string;
   sinceUtc: string | null;
+  /** Repeat "link lost" reports the set absorbed for this node. */
+  suppressedCount: number;
 }
 
 export interface ActiveErrorState {
@@ -566,14 +601,32 @@ export interface ActiveErrorState {
   direction: BreachDirection | null;
   severity: AlertSeverity;
   sinceUtc: string;
+  /** Repeat breach reports recognised and not re-alerted. */
+  suppressedCount: number;
+}
+
+/** The disconnected set diffed against the one this client saw last poll. */
+export interface PipelineSetChanges {
+  compared: boolean;
+  newlyDisconnected: string[];
+  recovered: string[];
+  stillDisconnected: number;
+  /** Disconnected ∪ nodes with a critical open breach. */
+  needsAttention: string[];
 }
 
 export interface PipelineStatus {
   standardQueueDepth: number;
   criticalQueueDepth: number;
+  /** Backpressure limit on the standard queue. */
+  standardQueueCapacity: number;
+  standardBudgetPerTick: number;
   totalReceived: number;
   standardProcessed: number;
   criticalProcessed: number;
+  /** Queued standard packets the critical lane has overtaken in total. */
+  bypassedStandard: number;
+  lastCriticalBypassed: number;
   /** Repeats the error-state and disconnected sets recognised and dropped. */
   duplicatesSuppressed: number;
   dropped: number;
@@ -581,8 +634,10 @@ export interface PipelineStatus {
   averageCriticalWaitMs: number;
   registeredDevices: number;
   undoDepth: number;
+  redoDepth: number;
   disconnectedNodes: DisconnectedNode[];
   errorStates: ActiveErrorState[];
+  setChanges: PipelineSetChanges;
   /** Newest first. */
   recentAlerts: StreamAlert[];
   generatedUtc: string;
@@ -604,6 +659,8 @@ export interface PacketIntakeResult {
   suppressedDuplicates: number;
   rejected: string[];
   standardQueueDepth: number;
+  bypassedStandard: number;
+  droppedStandard: number;
   criticalAlerts: StreamAlert[];
 }
 
@@ -644,6 +701,11 @@ export interface NodeTimeline {
   toUtc: string;
   logSize: number;
   isDisconnected: boolean;
+  /** Entries inside the window, found by binary search on the sorted log. */
+  entriesInWindow: number;
+  /** Older entries the range read skipped without visiting. */
+  entriesSkipped: number;
+  rangeReadMicroseconds: number;
   series: TimelineSeries[];
   /** Commands, alerts and link changes, oldest first. */
   events: SensorLogEntry[];
@@ -688,6 +750,17 @@ export interface LiveDevice {
   readings: LiveReading[];
 }
 
+/** An exact dictionary lookup by node id or MAC address, timed. */
+export interface DeviceLookupResult {
+  key: string;
+  normalisedKey: string;
+  found: boolean;
+  matchedBy: "NodeId" | "MacAddress" | null;
+  elapsedMicroseconds: number;
+  registrySize: number;
+  device: LiveDevice | null;
+}
+
 export interface LiveDeviceResult {
   /** Every matching device, worst alert first. */
   items: LiveDevice[];
@@ -715,6 +788,9 @@ export interface SuggestedAction {
   nodeId: string | null;
   sensorName: string | null;
   searchTerm: string | null;
+  /** A learned filter: facet ("zone", "sensorCategory", "alertState", "status", "commandType") and value. */
+  filterFacet: string | null;
+  filterValue: string | null;
   commandType: CommandType | null;
   parameters: string | null;
   priority: CommandPriority | null;
@@ -728,26 +804,33 @@ export interface InsightsResponse {
   observedActions: number;
   learnedAssociations: number;
   activeTriggers: number;
+  learning: LearningStats;
   generatedUtc: string;
 }
 
-export type OperatorActivityKind = "Search" | "SelectNode";
+export interface LearnedRule {
+  condition: string;
+  action: string;
+  count: number;
+  support: number;
+  confidence: number;
+}
+
+export interface LearningStats {
+  rulesLearned: number;
+  transitionsLearned: number;
+  topRules: LearnedRule[];
+  applied: number;
+  dismissed: number;
+  /** Applied ÷ (applied + dismissed); null before any feedback. */
+  acceptanceRate: number | null;
+  recentActivity: { description: string; atUtc: string }[];
+}
+
+export type OperatorActivityKind = "Search" | "SelectNode" | "Filter";
+export type SuggestionFeedback = "Applied" | "Dismissed";
 
 /* ---------- Plumbing ---------- */
-
-async function handleResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    // A rejected write explains itself in the body (`{ "error": "…" }`).
-    // Surfacing that beats showing the operator a bare 400.
-    const detail = await response
-      .json()
-      .then((body: { error?: string }) => body?.error)
-      .catch(() => undefined);
-
-    throw new Error(detail ?? `API error: ${response.status} ${response.statusText}`);
-  }
-  return response.json() as Promise<T>;
-}
 
 function buildQuery(params: Record<string, unknown>): string {
   const search = new URLSearchParams();
@@ -771,17 +854,18 @@ function buildQuery(params: Record<string, unknown>): string {
 /* ---------- Read calls (writes land feature by feature) ---------- */
 
 export async function testConnection(): Promise<TestResponse> {
-  const response = await fetch(`${API_BASE_URL}/test`);
+  const response = await apiFetch(`${API_BASE_URL}/test`);
   return handleResponse<TestResponse>(response);
 }
 
-export async function getSummary(): Promise<EcosystemSummary> {
-  const response = await fetch(`${API_BASE_URL}/telemetry/summary`);
+export async function getSummary(signal?: AbortSignal): Promise<EcosystemSummary> {
+  const response = await apiFetch(`${API_BASE_URL}/telemetry/summary`, { signal });
   return handleResponse<EcosystemSummary>(response);
 }
 
 export async function getSensors(
-  filters: SensorFilters = {}
+  filters: SensorFilters = {},
+  signal?: AbortSignal
 ): Promise<SensorListItem[]> {
   const query = buildQuery({
     categories: filters.categories,
@@ -790,17 +874,17 @@ export async function getSensors(
     anomaliesOnly: filters.anomaliesOnly,
   });
 
-  const response = await fetch(`${API_BASE_URL}/sensors${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/sensors${query}`, { signal });
   return handleResponse<SensorListItem[]>(response);
 }
 
 export async function getSensorDetail(id: string): Promise<SensorDetail> {
-  const response = await fetch(`${API_BASE_URL}/sensors/${id}`);
+  const response = await apiFetch(`${API_BASE_URL}/sensors/${id}`);
   return handleResponse<SensorDetail>(response);
 }
 
-export async function getFilterOptions(): Promise<FilterOptions> {
-  const response = await fetch(`${API_BASE_URL}/sensors/filter-options`);
+export async function getFilterOptions(signal?: AbortSignal): Promise<FilterOptions> {
+  const response = await apiFetch(`${API_BASE_URL}/sensors/filter-options`, { signal });
   return handleResponse<FilterOptions>(response);
 }
 
@@ -810,7 +894,7 @@ export async function getSeries(
   maxPoints = 180
 ): Promise<SensorSeries[]> {
   const query = buildQuery({ hours, maxPoints });
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_BASE_URL}/telemetry/series/${sensorProfileId}${query}`
   );
   return handleResponse<SensorSeries[]>(response);
@@ -831,29 +915,30 @@ export async function getReadings(
     anomaliesOnly: filters.anomaliesOnly,
   });
 
-  const response = await fetch(`${API_BASE_URL}/telemetry/readings${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/telemetry/readings${query}`);
   return handleResponse<PagedResult<TelemetryReading>>(response);
 }
 
 export async function getAlerts(
   status?: AlertStatus,
-  take = 25
+  take = 25,
+  signal?: AbortSignal
 ): Promise<Alert[]> {
   const query = buildQuery({ status, take });
-  const response = await fetch(`${API_BASE_URL}/alerts${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/alerts${query}`, { signal });
   return handleResponse<Alert[]>(response);
 }
 
-export async function getEngagement(userId?: string): Promise<EngagementState> {
+export async function getEngagement(userId?: string, signal?: AbortSignal): Promise<EngagementState> {
   const query = buildQuery({ userId });
-  const response = await fetch(`${API_BASE_URL}/engagement${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/engagement${query}`, { signal });
   return handleResponse<EngagementState>(response);
 }
 
 export async function createSensor(
   request: CreateSensorRequest
 ): Promise<SensorProfile> {
-  const response = await fetch(`${API_BASE_URL}/sensors`, {
+  const response = await apiFetch(`${API_BASE_URL}/sensors`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -865,7 +950,7 @@ export async function updateSensorPayload(
   id: string,
   payload: UpdateSensorPayloadRequest
 ): Promise<SensorProfile> {
-  const response = await fetch(`${API_BASE_URL}/sensors/${id}/payload`, {
+  const response = await apiFetch(`${API_BASE_URL}/sensors/${id}/payload`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -873,22 +958,90 @@ export async function updateSensorPayload(
   return handleResponse<SensorProfile>(response);
 }
 
-export async function uploadAttachment(
+export interface UploadOptions {
+  /** Called as the body is sent, with a fraction from 0 to 1. */
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Uploads a file as multipart/form-data. Uses XMLHttpRequest rather than
+ * fetch because only XHR reports upload progress. The timeout restarts with
+ * every progress event, so a large file on a slow link is not cut off while
+ * bytes are still moving, but a stalled upload is.
+ */
+export function uploadAttachment(
   sensorId: string,
   file: File,
   attachmentType: AttachmentType,
-  description: string
+  description: string,
+  { onProgress, signal }: UploadOptions = {}
 ): Promise<SensorAttachment> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("attachmentType", attachmentType);
   formData.append("description", description);
 
-  const response = await fetch(
-    `${API_BASE_URL}/sensors/${sensorId}/attachments`,
-    { method: "POST", body: formData }
-  );
-  return handleResponse<SensorAttachment>(response);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let stallTimer = 0;
+
+    const armStallTimer = () => {
+      window.clearTimeout(stallTimer);
+      stallTimer = window.setTimeout(() => xhr.abort(), REQUEST_TIMEOUT_MS * 3);
+    };
+
+    const fail = (error: Error) => {
+      window.clearTimeout(stallTimer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(error);
+    };
+
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener("abort", onAbort);
+
+    xhr.upload.onprogress = (event) => {
+      armStallTimer();
+      if (event.lengthComputable) {
+        onProgress?.(event.loaded / event.total);
+      }
+    };
+
+    xhr.onload = async () => {
+      window.clearTimeout(stallTimer);
+      signal?.removeEventListener("abort", onAbort);
+      reportApiConnection("online");
+
+      const response = new Response(xhr.responseText || null, {
+        status: xhr.status,
+        statusText: xhr.statusText,
+        headers: { "Content-Type": xhr.getResponseHeader("Content-Type") ?? "application/json" },
+      });
+
+      if (!response.ok) {
+        reject(await toApiError(response));
+        return;
+      }
+      resolve((await response.json()) as SensorAttachment);
+    };
+
+    xhr.onerror = () => {
+      reportApiConnection("offline");
+      fail(new ApiError("The Smart-X API could not be reached.", "network"));
+    };
+
+    xhr.onabort = () => {
+      fail(
+        signal?.aborted
+          ? new DOMException("Upload cancelled.", "AbortError")
+          : new ApiError("The upload stalled and was stopped.", "timeout")
+      );
+    };
+
+    xhr.open("POST", `${API_BASE_URL}/sensors/${sensorId}/attachments`);
+    armStallTimer();
+    xhr.send(formData);
+  });
 }
 
 export function getAttachmentDownloadUrl(
@@ -905,7 +1058,7 @@ export async function getDeployment(
   zone?: string
 ): Promise<DeploymentValidationReport> {
   const query = buildQuery({ zone });
-  const response = await fetch(`${API_BASE_URL}/mesh/deployment${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/mesh/deployment${query}`);
   return handleResponse<DeploymentValidationReport>(response);
 }
 
@@ -913,12 +1066,12 @@ export async function getAggregateLoad(
   sensorIds: string[]
 ): Promise<AggregateLoad> {
   const query = buildQuery({ sensorIds });
-  const response = await fetch(`${API_BASE_URL}/mesh/load${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/mesh/load${query}`);
   return handleResponse<AggregateLoad>(response);
 }
 
 export async function getZoneLoad(zone: string): Promise<AggregateLoad> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_BASE_URL}/mesh/load/zone/${encodeURIComponent(zone)}`
   );
   return handleResponse<AggregateLoad>(response);
@@ -929,7 +1082,7 @@ export async function compareLoad(
   right: string
 ): Promise<LoadComparison> {
   const query = buildQuery({ left, right });
-  const response = await fetch(`${API_BASE_URL}/mesh/load/compare${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/mesh/load/compare${query}`);
   return handleResponse<LoadComparison>(response);
 }
 
@@ -937,7 +1090,7 @@ export async function ingestBatches(
   sensorId: string,
   request: IngestTelemetryRequest
 ): Promise<TelemetryIngestResult> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_BASE_URL}/mesh/sensors/${sensorId}/ingest`,
     {
       method: "POST",
@@ -972,31 +1125,33 @@ function buildCommandQuery(query: CommandQuery, extra: Record<string, unknown> =
 export async function getCommands(
   query: CommandQuery = {},
   page = 1,
-  pageSize = 25
+  pageSize = 25,
+  signal?: AbortSignal
 ): Promise<PagedResult<DeviceCommand>> {
   const search = buildCommandQuery(query, { page, pageSize });
-  const response = await fetch(`${API_BASE_URL}/commands${search}`);
+  const response = await apiFetch(`${API_BASE_URL}/commands${search}`, { signal });
   return handleResponse<PagedResult<DeviceCommand>>(response);
 }
 
 /** Live tail: the newest commands in the window, capped by the API. */
 export async function getCommandStream(
   query: CommandQuery = {},
-  take = 40
+  take = 40,
+  signal?: AbortSignal
 ): Promise<DeviceCommand[]> {
   const search = buildCommandQuery(query, { take });
-  const response = await fetch(`${API_BASE_URL}/commands/stream${search}`);
+  const response = await apiFetch(`${API_BASE_URL}/commands/stream${search}`, { signal });
   return handleResponse<DeviceCommand[]>(response);
 }
 
-export async function getCommandSummary(query: CommandQuery = {}): Promise<CommandSummary> {
+export async function getCommandSummary(query: CommandQuery = {}, signal?: AbortSignal): Promise<CommandSummary> {
   const search = buildCommandQuery(query);
-  const response = await fetch(`${API_BASE_URL}/commands/summary${search}`);
+  const response = await apiFetch(`${API_BASE_URL}/commands/summary${search}`, { signal });
   return handleResponse<CommandSummary>(response);
 }
 
-export async function getCommandFilterOptions(): Promise<CommandFilterOptions> {
-  const response = await fetch(`${API_BASE_URL}/commands/filter-options`);
+export async function getCommandFilterOptions(signal?: AbortSignal): Promise<CommandFilterOptions> {
+  const response = await apiFetch(`${API_BASE_URL}/commands/filter-options`, { signal });
   return handleResponse<CommandFilterOptions>(response);
 }
 
@@ -1004,7 +1159,7 @@ export async function getCommandFilterOptions(): Promise<CommandFilterOptions> {
 export async function dispatchCommand(
   request: DispatchCommandRequest
 ): Promise<DeviceCommand> {
-  const response = await fetch(`${API_BASE_URL}/commands`, {
+  const response = await apiFetch(`${API_BASE_URL}/commands`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -1012,32 +1167,66 @@ export async function dispatchCommand(
   return handleResponse<DeviceCommand>(response);
 }
 
-/** The undo stack, most recent override first. */
-export async function getOverrideHistory(): Promise<OverrideHistoryEntry[]> {
-  const response = await fetch(`${API_BASE_URL}/commands/overrides`);
-  return handleResponse<OverrideHistoryEntry[]>(response);
+/** The undo and redo stacks, top first. */
+export async function getOverrideHistory(signal?: AbortSignal): Promise<OverrideHistory> {
+  const response = await apiFetch(`${API_BASE_URL}/commands/overrides`, { signal });
+  return handleResponse<OverrideHistory>(response);
 }
 
 /** Pops the most recent override: cancels it if still queued, otherwise sends its inverse. */
-export async function undoLastOverride(issuedBy = "operator"): Promise<UndoResult> {
-  const response = await fetch(`${API_BASE_URL}/commands/overrides/undo`, {
+export async function undoLastOverride(
+  expectedCommandId?: string,
+  issuedBy = "operator"
+): Promise<UndoResult> {
+  const response = await apiFetch(`${API_BASE_URL}/commands/overrides/undo`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ issuedBy }),
+    // Naming the entry makes the request idempotent: if it was already undone,
+    // the API reports that instead of undoing the next one down.
+    body: JSON.stringify({ issuedBy, expectedCommandId }),
   });
   return handleResponse<UndoResult>(response);
 }
 
-export async function getPipelineStatus(): Promise<PipelineStatus> {
-  const response = await fetch(`${API_BASE_URL}/commands/pipeline`);
+/** Re-applies the most recently undone override. Idempotent in the same way. */
+export async function redoLastUndo(
+  expectedCommandId?: string,
+  issuedBy = "operator"
+): Promise<RedoResult> {
+  const response = await apiFetch(`${API_BASE_URL}/commands/overrides/redo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issuedBy, expectedCommandId }),
+  });
+  return handleResponse<RedoResult>(response);
+}
+
+/**
+ * The intake state. `known` is the disconnected set this client saw last time;
+ * the API answers with what changed since (set difference).
+ */
+export async function getPipelineStatus(
+  known?: string[],
+  signal?: AbortSignal
+): Promise<PipelineStatus> {
+  // An empty set is still a comparison: send a blank entry so the API sees it.
+  const query = known === undefined ? "" : buildQuery({ known: known.length > 0 ? known : [""] });
+  const response = await apiFetch(`${API_BASE_URL}/commands/pipeline${query}`, { signal });
   return handleResponse<PipelineStatus>(response);
+}
+
+/** Exact O(1) lookup by node id or MAC address (any notation), with the probe time. */
+export async function lookupDevice(key: string, signal?: AbortSignal): Promise<DeviceLookupResult> {
+  const query = buildQuery({ key });
+  const response = await apiFetch(`${API_BASE_URL}/commands/devices/lookup${query}`, { signal });
+  return handleResponse<DeviceLookupResult>(response);
 }
 
 /** Posts packets to the intake. Critical ones are processed before this resolves. */
 export async function ingestStreamPackets(
   packets: StreamPacketRequest[]
 ): Promise<PacketIntakeResult> {
-  const response = await fetch(`${API_BASE_URL}/commands/packets`, {
+  const response = await apiFetch(`${API_BASE_URL}/commands/packets`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(packets),
@@ -1048,17 +1237,18 @@ export async function ingestStreamPackets(
 export async function getNodeTimeline(
   nodeId: string,
   minutes = 60,
-  maxPoints = 120
+  maxPoints = 120,
+  signal?: AbortSignal
 ): Promise<NodeTimeline> {
   const query = buildQuery({ minutes, maxPoints });
-  const response = await fetch(
-    `${API_BASE_URL}/commands/nodes/${encodeURIComponent(nodeId)}/timeline${query}`
+  const response = await apiFetch(
+    `${API_BASE_URL}/commands/nodes/${encodeURIComponent(nodeId)}/timeline${query}`, { signal }
   );
   return handleResponse<NodeTimeline>(response);
 }
 
 /** Every registered device matching the filter, with its latest readings. */
-export async function getLiveDevices(query: DeviceQuery = {}): Promise<LiveDeviceResult> {
+export async function getLiveDevices(query: DeviceQuery = {}, signal?: AbortSignal): Promise<LiveDeviceResult> {
   const search = buildQuery({
     search: query.search,
     sensorCategories: query.sensorCategories,
@@ -1066,13 +1256,13 @@ export async function getLiveDevices(query: DeviceQuery = {}): Promise<LiveDevic
     minAlertSeverity: query.minAlertSeverity,
     zone: query.zone,
   });
-  const response = await fetch(`${API_BASE_URL}/commands/devices${search}`);
+  const response = await apiFetch(`${API_BASE_URL}/commands/devices${search}`, { signal });
   return handleResponse<LiveDeviceResult>(response);
 }
 
-export async function getInsights(issuedBy = "operator"): Promise<InsightsResponse> {
+export async function getInsights(issuedBy = "operator", signal?: AbortSignal): Promise<InsightsResponse> {
   const query = buildQuery({ issuedBy });
-  const response = await fetch(`${API_BASE_URL}/commands/insights${query}`);
+  const response = await apiFetch(`${API_BASE_URL}/commands/insights${query}`, { signal });
   return handleResponse<InsightsResponse>(response);
 }
 
@@ -1085,11 +1275,32 @@ export async function recordActivity(
   value: string,
   issuedBy = "operator"
 ): Promise<void> {
-  await fetch(`${API_BASE_URL}/commands/activity`, {
+  await apiFetch(`${API_BASE_URL}/commands/activity`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind, value, issuedBy }),
   }).catch(() => undefined);
+}
+
+/** Applied or dismissed: the engine re-ranks that suggestion from now on. */
+export async function sendSuggestionFeedback(
+  suggestionId: string,
+  outcome: SuggestionFeedback,
+  issuedBy = "operator"
+): Promise<void> {
+  await apiFetch(`${API_BASE_URL}/commands/insights/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestionId, outcome, issuedBy }),
+  }).catch(() => undefined);
+}
+
+/** Clears everything the action engine has learned, to demonstrate learning from nothing. */
+export async function resetLearning(): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/commands/insights/reset`, { method: "POST" });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
 }
 
 export default {
@@ -1118,7 +1329,11 @@ export default {
   dispatchCommand,
   getOverrideHistory,
   undoLastOverride,
+  redoLastUndo,
   getPipelineStatus,
+  lookupDevice,
+  sendSuggestionFeedback,
+  resetLearning,
   ingestStreamPackets,
   getNodeTimeline,
   getLiveDevices,

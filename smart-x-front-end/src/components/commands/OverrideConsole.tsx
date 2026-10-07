@@ -6,7 +6,8 @@ import type {
   CommandFilterOptions,
   DeviceCommand,
   DispatchCommandRequest,
-  OverrideHistoryEntry,
+  OverrideHistory,
+  RedoResult,
   UndoResult,
 } from "../../services/apiService";
 
@@ -31,14 +32,19 @@ interface OverrideConsoleProps {
   /** Node id taken from the stream selection; the operator can still change it. */
   targetNode: string;
   pending: CommandRecord[];
-  /** The API's undo stack, most recent first. */
-  history: OverrideHistoryEntry[];
+  /** The API's undo and redo stacks, top first. */
+  history: OverrideHistory;
   draft: OverrideDraft | null;
   onTargetChange: (nodeId: string) => void;
   /** Resolves with the queued command, or rejects with the API's reason. */
   onDispatch: (request: DispatchCommandRequest) => Promise<DeviceCommand>;
-  /** Pops the top of the undo stack. Rejects with the API's reason. */
-  onUndo: () => Promise<UndoResult>;
+  /**
+   * Pops the top of the undo stack. The id of the entry the operator is
+   * looking at is sent with it, so a double click cannot undo two overrides.
+   */
+  onUndo: (expectedCommandId: string) => Promise<UndoResult>;
+  /** Re-applies the top of the redo stack, idempotent in the same way. */
+  onRedo: (expectedCommandId: string) => Promise<RedoResult>;
 }
 
 /** How many undo entries are listed under the one that will be undone. */
@@ -73,6 +79,7 @@ function OverrideConsole({
   onTargetChange,
   onDispatch,
   onUndo,
+  onRedo,
 }: OverrideConsoleProps) {
   const [commandType, setCommandType] = useState<CommandType>("SetThreshold");
   const [parameters, setParameters] = useState("");
@@ -84,9 +91,10 @@ function OverrideConsole({
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<DeviceCommand | null>(null);
 
-  const [undoing, setUndoing] = useState(false);
-  const [undoResult, setUndoResult] = useState<UndoResult | null>(null);
-  const [undoError, setUndoError] = useState<string | null>(null);
+  // One flag for both directions: while either request is out, neither button
+  // can fire again.
+  const [stackBusy, setStackBusy] = useState<"undo" | "redo" | null>(null);
+  const [stackResult, setStackResult] = useState<{ ok: boolean; title: string; message: string } | null>(null);
 
   // A new draft fills the form once. Adjusted during render rather than in an
   // effect, so the form never paints a frame with the old values. The
@@ -114,21 +122,46 @@ function OverrideConsole({
     setCommandType(capable[0]);
   }
 
+  const [top, ...older] = history.undo;
+  const redoTop = history.redo[0];
+
   const handleUndo = async () => {
-    setUndoing(true);
-    setUndoError(null);
-    setUndoResult(null);
+    if (!top || stackBusy) return;
+    setStackBusy("undo");
+    setStackResult(null);
 
     try {
-      setUndoResult(await onUndo());
+      const result = await onUndo(top.commandId);
+      setStackResult({
+        ok: result.outcome !== "Irreversible",
+        title: result.outcome === "AlreadyUndone" ? "Already undone" : result.outcome,
+        message: result.message,
+      });
     } catch (err) {
-      setUndoError(err instanceof Error ? err.message : "Undo failed.");
+      setStackResult({ ok: false, title: "Not undone", message: err instanceof Error ? err.message : "Undo failed." });
     } finally {
-      setUndoing(false);
+      setStackBusy(null);
     }
   };
 
-  const [top, ...older] = history;
+  const handleRedo = async () => {
+    if (!redoTop || stackBusy) return;
+    setStackBusy("redo");
+    setStackResult(null);
+
+    try {
+      const result = await onRedo(redoTop.commandId);
+      setStackResult({
+        ok: true,
+        title: result.outcome === "AlreadyRedone" ? "Already redone" : "Redone",
+        message: result.message,
+      });
+    } catch (err) {
+      setStackResult({ ok: false, title: "Not redone", message: err instanceof Error ? err.message : "Redo failed." });
+    } finally {
+      setStackBusy(null);
+    }
+  };
 
   const ready = targetNode !== "" && parameters.trim() !== "" && confirmed && !sending;
 
@@ -335,9 +368,31 @@ function OverrideConsole({
       {/* The undo stack. Undo always acts on the top entry, the most recent
           override, and the API says in advance what undoing it will do. */}
       <div className="override-undo">
-        <h3 className="override-pending-title">
-          Undo history <span className="override-undo-depth">{history.length}</span>
-        </h3>
+        <div className="override-undo-head">
+          <h3 className="override-pending-title">
+            Undo history <span className="override-undo-depth">{history.undo.length}</span>
+          </h3>
+          <div className="override-undo-controls">
+            <button
+              type="button"
+              className="override-btn override-btn-undo"
+              onClick={handleUndo}
+              disabled={!top || stackBusy !== null}
+              title={top ? `Undo ${humanise(top.commandType)} on ${top.nodeId}` : "Nothing to undo"}
+            >
+              {stackBusy === "undo" ? "Undoing…" : "↶ Undo"}
+            </button>
+            <button
+              type="button"
+              className="override-btn override-btn-redo"
+              onClick={handleRedo}
+              disabled={!redoTop || stackBusy !== null}
+              title={redoTop ? `Redo ${humanise(redoTop.commandType)} on ${redoTop.nodeId}` : "Nothing to redo"}
+            >
+              {stackBusy === "redo" ? "Redoing…" : `↷ Redo${history.redo.length > 0 ? ` (${history.redo.length})` : ""}`}
+            </button>
+          </div>
+        </div>
 
         {top ? (
           <>
@@ -359,14 +414,6 @@ function OverrideConsole({
                   ? "cancel it before it leaves the queue."
                   : `${top.undoDescription.charAt(0).toLowerCase()}${top.undoDescription.slice(1)}.`}
               </p>
-              <button
-                type="button"
-                className="override-btn override-btn-undo"
-                onClick={handleUndo}
-                disabled={undoing}
-              >
-                {undoing ? "Undoing…" : "Undo last override"}
-              </button>
             </div>
 
             {older.length > 0 && (
@@ -390,20 +437,19 @@ function OverrideConsole({
           </p>
         )}
 
-        {undoError && (
-          <p className="override-result override-result-error" role="alert">
-            <strong>Not undone.</strong> {undoError}
+        {redoTop && (
+          <p className="override-redo-next">
+            Redo will re-send <strong>{humanise(redoTop.commandType)}</strong>{" "}
+            <code>{redoTop.parameters}</code> to {redoTop.nodeId}.
           </p>
         )}
 
-        {undoResult && !undoError && (
+        {stackResult && (
           <p
-            className={`override-result ${
-              undoResult.outcome === "Irreversible" ? "override-result-error" : "override-result-ok"
-            }`}
-            role="status"
+            className={`override-result ${stackResult.ok ? "override-result-ok" : "override-result-error"}`}
+            role={stackResult.ok ? "status" : "alert"}
           >
-            <strong>{undoResult.outcome}.</strong> {undoResult.message}
+            <strong>{stackResult.title}.</strong> {stackResult.message}
           </p>
         )}
       </div>

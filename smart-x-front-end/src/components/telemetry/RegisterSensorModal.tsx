@@ -1,20 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
+import { ApiError, createSensor } from "../../services/apiService";
 import type { SensorCategory } from "../../services/apiService";
-import { createSensor } from "../../services/apiService";
-import { humanise } from "../../utils/format";
+import RegistrationFields from "./RegistrationFields";
+import { useRegistrationForm } from "../../hooks/useRegistrationForm";
 
 interface RegisterSensorModalProps {
+  /** Zones reported by the API, for the zone dropdown. */
+  zones?: string[];
   onClose: () => void;
   onRegistered: () => void;
 }
-
-const SENSOR_CATEGORIES: SensorCategory[] = [
-  "Environmental",
-  "PowerConsumption",
-  "Actuator",
-  "Motion",
-  "Connectivity",
-];
 
 function emptyForm() {
   return {
@@ -27,9 +23,9 @@ function emptyForm() {
   };
 }
 
-function RegisterSensorModal({ onClose, onRegistered }: RegisterSensorModalProps) {
+function RegisterSensorModal({ zones, onClose, onRegistered }: RegisterSensorModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [form, setForm] = useState(emptyForm);
+  const formState = useRegistrationForm(emptyForm());
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -51,32 +47,40 @@ function RegisterSensorModal({ onClose, onRegistered }: RegisterSensorModalProps
     };
   }, [onClose]);
 
-  const handleSave = useCallback(async () => {
-    if (!form.name.trim()) {
-      setMessage({ type: "error", text: "Device name is required." });
-      return;
-    }
-    if (!form.macAddress.trim()) {
-      setMessage({ type: "error", text: "MAC address is required." });
-      return;
-    }
+  const { form, isValid, markSubmitted, reset, setServerErrors } = formState;
 
-    setSaving(true);
-    setMessage(null);
-    try {
-      await createSensor(form);
-      setMessage({ type: "success", text: "Device registered successfully." });
-      setForm(emptyForm());
-      onRegistered();
-    } catch (err) {
-      setMessage({
-        type: "error",
-        text: err instanceof Error ? err.message : "Failed to register device.",
-      });
-    } finally {
-      setSaving(false);
-    }
-  }, [form, onRegistered]);
+  const handleSubmit = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      markSubmitted();
+      if (!isValid) {
+        return;
+      }
+
+      setSaving(true);
+      setMessage(null);
+      try {
+        const created = await createSensor({ ...form, name: form.name.trim(), room: form.room.trim() });
+        setMessage({ type: "success", text: `${created.nodeId} registered. It will show as offline until it first reports.` });
+        reset(emptyForm());
+        onRegistered();
+      } catch (err) {
+        if (err instanceof ApiError && Object.keys(err.fieldErrors).length > 0) {
+          // 400 or 409: the API named the field, so the message goes under it.
+          setServerErrors(err.fieldErrors);
+          setMessage({
+            type: "error",
+            text: err.status === 409 ? "That device is already registered." : "Please correct the highlighted fields.",
+          });
+        } else {
+          setMessage({ type: "error", text: err instanceof Error ? err.message : "Failed to register device." });
+        }
+      } finally {
+        setSaving(false);
+      }
+    },
+    [form, isValid, markSubmitted, reset, setServerErrors, onRegistered]
+  );
 
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
@@ -85,7 +89,7 @@ function RegisterSensorModal({ onClose, onRegistered }: RegisterSensorModalProps
         className="modal-dialog register-modal-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Register new sensor"
+        aria-labelledby="register-sensor-title"
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
@@ -93,7 +97,7 @@ function RegisterSensorModal({ onClose, onRegistered }: RegisterSensorModalProps
           <header className="detail-head">
             <div className="detail-head-main">
               <div>
-                <h2 className="detail-title">Register New Device</h2>
+                <h2 id="register-sensor-title" className="detail-title">Register New Device</h2>
                 <div className="detail-subtitle">
                   Add a new sensor to the mesh by providing its registration details.
                 </div>
@@ -105,104 +109,37 @@ function RegisterSensorModal({ onClose, onRegistered }: RegisterSensorModalProps
           </header>
 
           <div className="detail-scroll">
-            <div className="payload-form">
-              <label className="payload-field">
-                <span className="payload-field-label">Device Name</span>
-                <input
-                  type="text"
-                  className="payload-input"
-                  value={form.name}
-                  placeholder="e.g. Temp Sensor Floor 2"
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                />
-              </label>
-
-              <label className="payload-field">
-                <span className="payload-field-label">MAC Address / Unique Identifier</span>
-                <input
-                  type="text"
-                  className="payload-input"
-                  value={form.macAddress}
-                  placeholder="e.g. AA:BB:CC:DD:EE:FF"
-                  onChange={(e) => setForm({ ...form, macAddress: e.target.value })}
-                />
-              </label>
-
-              <label className="payload-field">
-                <span className="payload-field-label">Room</span>
-                <input
-                  type="text"
-                  className="payload-input"
-                  value={form.room}
-                  placeholder="e.g. Server Room A"
-                  onChange={(e) => setForm({ ...form, room: e.target.value })}
-                />
-              </label>
-
-              <label className="payload-field">
-                <span className="payload-field-label">Zone</span>
-                <input
-                  type="text"
-                  className="payload-input"
-                  value={form.zone}
-                  placeholder="e.g. Zone A"
-                  onChange={(e) => setForm({ ...form, zone: e.target.value })}
-                />
-              </label>
-
-              <label className="payload-field">
-                <span className="payload-field-label">Node ID</span>
-                <input
-                  type="text"
-                  className="payload-input"
-                  value={form.nodeId}
-                  placeholder="e.g. NODE-001"
-                  onChange={(e) => setForm({ ...form, nodeId: e.target.value })}
-                />
-              </label>
-
-              <label className="payload-field">
-                <span className="payload-field-label">Sensor Category</span>
-                <select
-                  className="payload-input"
-                  value={form.category}
-                  onChange={(e) =>
-                    setForm({ ...form, category: e.target.value as SensorCategory })
-                  }
-                >
-                  {SENSOR_CATEGORIES.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {humanise(cat)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <form className="payload-form" noValidate onSubmit={handleSubmit}>
+              <RegistrationFields state={formState} zones={zones} disabled={saving} />
 
               {message && (
-                <div className={`payload-message payload-message-${message.type}`}>
+                <div className={`payload-message payload-message-${message.type}`} role="status">
                   {message.text}
                 </div>
               )}
 
               <div className="payload-actions">
                 <button
-                  type="button"
+                  type="submit"
                   className="payload-btn payload-btn-save"
-                  disabled={saving}
-                  onClick={handleSave}
+                  disabled={saving || !isValid}
+                  title={!isValid ? "Complete every field to register" : undefined}
                 >
-                  {saving ? "Registering..." : "Register Device"}
+                  {saving ? "Registering…" : "Register Device"}
                 </button>
                 <button
                   type="button"
                   className="payload-btn payload-btn-reset"
                   disabled={saving}
-                  onClick={() => { setForm(emptyForm()); setMessage(null); }}
+                  onClick={() => {
+                    reset(emptyForm());
+                    setMessage(null);
+                  }}
                 >
                   Clear
                 </button>
               </div>
-            </div>
+            </form>
           </div>
         </section>
       </div>

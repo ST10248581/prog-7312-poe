@@ -3,6 +3,7 @@ using SmartX.Api.Logic;
 
 namespace SmartX.Api.Controllers;
 
+/// <summary>Connectivity check. The dashboard calls it at start-up and while it waits for an offline API.</summary>
 [ApiController]
 [Route("api/[controller]")]
 public class TestController : ControllerBase
@@ -15,9 +16,8 @@ public class TestController : ControllerBase
     }
 
     [HttpGet]
-    public IActionResult Get()
+    public async Task<IActionResult> Get(CancellationToken cancellationToken)
     {
-        var result = _testService.GetStatus();
-        return Ok(result);
+        return Ok(await _testService.GetStatusAsync(cancellationToken));
     }
 }

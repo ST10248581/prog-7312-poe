@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ApiError,
   getAlerts,
   getEngagement,
   getFilterOptions,
@@ -24,26 +25,35 @@ import SensorCard from "../components/telemetry/SensorCard";
 import RegisterSensorModal from "../components/telemetry/RegisterSensorModal";
 import SensorDetailModal from "../components/telemetry/SensorDetailModal";
 import StatTile from "../components/telemetry/StatTile";
+import { onApiReconnected } from "../services/apiStatus";
+import { isAbortError, usePolling } from "../hooks/usePolling";
+import { usePersistentState } from "../state/appState";
 import { formatCompact, formatNumber, formatTime } from "../utils/format";
 import "./TelemetryPage.css";
 
 const REFRESH_MS = 10_000;
 
 function TelemetryPage() {
-  const [summary, setSummary] = useState<EcosystemSummary | null>(null);
-  const [sensors, setSensors] = useState<SensorListItem[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [options, setOptions] = useState<FilterOptions | null>(null);
-  const [engagement, setEngagement] = useState<EngagementState | null>(null);
-  const [detail, setDetail] = useState<SensorDetail | null>(null);
+  // Everything that should survive leaving the page lives in the app state
+  // store rather than plain useState: the operator's choices (filters, live
+  // toggle, the open sensor) and the last data shown, so coming back renders
+  // the page exactly as it was while it refreshes. Choices are also kept in
+  // sessionStorage, so a reload restores them too.
+  const [summary, setSummary] = usePersistentState<EcosystemSummary | null>("telemetry.summary", null);
+  const [sensors, setSensors] = usePersistentState<SensorListItem[]>("telemetry.sensors", []);
+  const [alerts, setAlerts] = usePersistentState<Alert[]>("telemetry.alerts", []);
+  const [options, setOptions] = usePersistentState<FilterOptions | null>("telemetry.options", null);
+  const [engagement, setEngagement] = usePersistentState<EngagementState | null>("telemetry.engagement", null);
+  const [detail, setDetail] = usePersistentState<SensorDetail | null>("telemetry.detail", null);
 
-  const [filters, setFilters] = useState<SensorFilters>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [liveRefresh, setLiveRefresh] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = usePersistentState<SensorFilters>("telemetry.filters", {}, { session: true });
+  const [selectedId, setSelectedId] = usePersistentState<string | null>("telemetry.selectedId", null);
+  const [liveRefresh, setLiveRefresh] = usePersistentState("telemetry.live", true, { session: true });
+  const [lastRefresh, setLastRefresh] = usePersistentState<Date | null>("telemetry.lastRefresh", null);
+
+  const [loading, setLoading] = useState(summary === null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [showRegister, setShowRegister] = useState(false);
 
   // Tracks the most recently requested node so a slow response for a previously
@@ -52,13 +62,16 @@ function TelemetryPage() {
 
   // `loading` covers the first paint only; live refreshes swap data in place
   // rather than flashing the panel back to a loading state.
-  const loadDashboard = useCallback(async (activeFilters: SensorFilters) => {
+  // The signal is aborted when the filters change, polling stops or the page
+  // unmounts, so a response that is no longer wanted is never applied.
+  const loadDashboard = useCallback(async (activeFilters: SensorFilters, signal?: AbortSignal) => {
     try {
       const [summaryData, sensorData, alertData] = await Promise.all([
-        getSummary(),
-        getSensors(activeFilters),
-        getAlerts("Active", 12),
+        getSummary(signal),
+        getSensors(activeFilters, signal),
+        getAlerts("Active", 12, signal),
       ]);
+      if (signal?.aborted) return;
 
       setSummary(summaryData);
       setSensors(sensorData);
@@ -66,36 +79,43 @@ function TelemetryPage() {
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to reach the Smart-X API");
+      if (isAbortError(err)) return;
+      // An unreachable API is announced once, app-wide, by ApiStatusBanner;
+      // only errors the API itself returned are shown here.
+      setError(err instanceof ApiError && err.isUnreachable ? null : err instanceof Error ? err.message : "Request failed.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setSummary, setSensors, setAlerts, setLastRefresh]);
 
-  // Static lookups, fetched once.
-  useEffect(() => {
+  // Static lookups: fetched once, and again if the API was down at startup.
+  const loadLookups = useCallback(() => {
     getFilterOptions().then(setOptions).catch(() => undefined);
     getEngagement().then(setEngagement).catch(() => undefined);
-  }, []);
+  }, [setOptions, setEngagement]);
 
-  // Refetch whenever the filters change. The rule below sees setState inside
-  // loadDashboard and assumes it runs synchronously; every call sits after an
-  // await, and fetching from the API is exactly the external-system case the
-  // rule carves out.
   useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    loadDashboard(filters);
-  }, [filters, loadDashboard]);
+    loadLookups();
+  }, [loadLookups]);
 
-  // Live polling: the real-time feedback loop.
-  useEffect(() => {
-    if (!liveRefresh) {
-      return;
-    }
+  // The API has come back: refresh everything rather than wait for the next poll.
+  useEffect(
+    () =>
+      onApiReconnected(() => {
+        loadLookups();
+        loadDashboard(filters);
+      }),
+    [loadLookups, loadDashboard, filters]
+  );
 
-    const timer = window.setInterval(() => loadDashboard(filters), REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [liveRefresh, filters, loadDashboard]);
+  // The real-time feedback loop. Loads at once and whenever the filters change
+  // (cancelling the request in flight), then every REFRESH_MS while live —
+  // never overlapping a slow response, and resting while the tab is hidden.
+  usePolling((signal) => loadDashboard(filters, signal), {
+    intervalMs: REFRESH_MS,
+    live: liveRefresh,
+    key: JSON.stringify(filters),
+  });
 
   // Details on demand, driven by the selection event rather than an effect.
   const handleSelect = useCallback(async (id: string) => {
@@ -117,19 +137,19 @@ function TelemetryPage() {
         setDetailLoading(false);
       }
     }
-  }, []);
+  }, [setSelectedId, setDetail]);
 
   const handleCloseDetail = useCallback(() => {
     requestedIdRef.current = null;
     setSelectedId(null);
     setDetail(null);
-  }, []);
+  }, [setSelectedId, setDetail]);
 
   const handlePayloadUpdated = useCallback((updatedDetail: SensorDetail) => {
     setDetail(updatedDetail);
     // Refresh the sensor grid so cards reflect the updated fields
     loadDashboard(filters);
-  }, [loadDashboard, filters]);
+  }, [loadDashboard, filters, setDetail]);
 
   const handleDetailRefresh = useCallback(() => {
     if (selectedId) {
@@ -149,7 +169,7 @@ function TelemetryPage() {
   const handleSensorRegistered = useCallback(() => {
     loadDashboard(filters);
     getFilterOptions().then(setOptions).catch(() => undefined);
-  }, [loadDashboard, filters]);
+  }, [loadDashboard, filters, setOptions]);
 
   const healthTone =
     !summary || summary.meshHealthScore >= 85
@@ -185,9 +205,8 @@ function TelemetryPage() {
       </header>
 
       {error && (
-        <div className="page-error">
-          <strong>API unreachable.</strong> {error} — start the backend with{" "}
-          <code>dotnet run</code> in <code>smart-x-backend/SmartX.Api</code>.
+        <div className="page-error" role="alert">
+          <strong>The dashboard could not refresh.</strong> {error}
         </div>
       )}
 
@@ -283,7 +302,9 @@ function TelemetryPage() {
           </div>
 
           {!loading && sensors.length === 0 && (
-            <p className="panel-empty">No sensors match the current filters.</p>
+            <p className="panel-empty">
+              {lastRefresh ? "No sensors match the current filters." : "Waiting for the Smart-X API — sensors appear once it responds."}
+            </p>
           )}
         </section>
 
@@ -291,6 +312,7 @@ function TelemetryPage() {
           alerts={alerts}
           sensors={sensors}
           totalActive={summary?.activeAlertCount ?? 0}
+          loaded={lastRefresh !== null}
           onSelectSensor={handleSelect}
         />
       </div>
@@ -313,11 +335,13 @@ function TelemetryPage() {
           onClose={handleCloseDetail}
           onPayloadUpdated={handlePayloadUpdated}
           onDetailRefresh={handleDetailRefresh}
+          zones={options?.zones}
         />
       )}
 
       {showRegister && (
         <RegisterSensorModal
+          zones={options?.zones}
           onClose={() => setShowRegister(false)}
           onRegistered={handleSensorRegistered}
         />

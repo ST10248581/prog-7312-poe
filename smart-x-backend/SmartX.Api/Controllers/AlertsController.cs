@@ -17,8 +17,8 @@ public class AlertsController : ControllerBase
 
     /// <summary>Severity-ordered and capped, so the feed stays actionable.</summary>
     [HttpGet]
-    public IActionResult GetAlerts([FromQuery] AlertStatus? status, [FromQuery] int take = 25)
+    public async Task<IActionResult> GetAlerts([FromQuery] AlertStatus? status, CancellationToken cancellationToken, [FromQuery] int take = 25)
     {
-        return Ok(_alertService.GetAlerts(status, take));
+        return Ok(await _alertService.GetAlertsAsync(status, take, cancellationToken));
     }
 }

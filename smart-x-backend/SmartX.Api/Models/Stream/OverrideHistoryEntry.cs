@@ -9,7 +9,22 @@ public enum UndoOutcome
     Reverted,
 
     /// <summary>The override had already acted and has no inverse (a restart, a sample).</summary>
-    Irreversible
+    Irreversible,
+
+    /// <summary>
+    /// The override the client asked to undo had already been undone (a double
+    /// click, or a retried request). Nothing changed: undo is idempotent.
+    /// </summary>
+    AlreadyUndone
+}
+
+public enum RedoOutcome
+{
+    /// <summary>The undone override was issued again and is back on the undo stack.</summary>
+    Redone,
+
+    /// <summary>It had already been redone. Nothing changed: redo is idempotent.</summary>
+    AlreadyRedone
 }
 
 /// <summary>
@@ -34,8 +49,18 @@ public class OverrideHistoryEntry
     /// <summary>What undo will do, in words, e.g. "Restore temp.max to 26.5".</summary>
     public string UndoDescription { get; init; } = string.Empty;
 
+    /// <summary>When this entry was created by a redo, the command id of the entry it re-applied.</summary>
+    public Guid? RedoOf { get; init; }
+
     /// <summary>Current status of the original command, filled in when the stack is read.</summary>
     public CommandStatus? Status { get; set; }
+}
+
+/// <summary>Both history stacks, top first, so the console can show what undo and redo will act on.</summary>
+public class OverrideHistoryResponse
+{
+    public List<OverrideHistoryEntry> Undo { get; set; } = new();
+    public List<OverrideHistoryEntry> Redo { get; set; } = new();
 }
 
 public class UndoResult
@@ -48,4 +73,20 @@ public class UndoResult
     public DeviceCommand? RevertCommand { get; init; }
 
     public int RemainingDepth { get; init; }
+    public int RedoDepth { get; init; }
+}
+
+public class RedoResult
+{
+    public RedoOutcome Outcome { get; init; }
+    public string Message { get; init; } = string.Empty;
+
+    /// <summary>The new undo entry the redo created.</summary>
+    public OverrideHistoryEntry? Redone { get; init; }
+
+    /// <summary>The command that re-applied the override.</summary>
+    public DeviceCommand? Command { get; init; }
+
+    public int UndoDepth { get; init; }
+    public int RedoDepth { get; init; }
 }

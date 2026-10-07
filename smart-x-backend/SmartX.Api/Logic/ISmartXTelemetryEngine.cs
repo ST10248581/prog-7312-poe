@@ -1,4 +1,3 @@
-using SmartX.Api.Models;
 using SmartX.Api.Models.Requests;
 using SmartX.Api.Models.Responses;
 using SmartX.Api.Models.Telemetry;
@@ -10,6 +9,13 @@ namespace SmartX.Api.Logic;
 /// sensor, telemetry, alert and engagement services so every controller talks to
 /// one class, and adds the mesh-level operations — batch ingestion, load
 /// aggregation and deployment validation — that span more than one repository.
+/// <para>
+/// Every operation is asynchronous and cancellable. The store is in memory
+/// today, so most complete synchronously, but the contract is the one a
+/// database-backed store needs: swapping the repositories later does not change
+/// a single controller. When a browser abandons a request (its timeout fires or
+/// the user navigates away) the token stops the work.
+/// </para>
 /// </summary>
 public interface ISmartXTelemetryEngine : ISensorService, ITelemetryService, IAlertService, IEngagementService
 {
@@ -18,23 +24,23 @@ public interface ISmartXTelemetryEngine : ISensorService, ITelemetryService, IAl
     /// wrapping every raw sample in a strongly typed packet before flattening the
     /// lot into the reading collection. Returns null if the sensor is unknown.
     /// </summary>
-    TelemetryIngestResult? IngestHistoricalBatches(Guid sensorProfileId, IngestTelemetryRequest request);
+    Task<TelemetryIngestResult?> IngestHistoricalBatchesAsync(Guid sensorProfileId, IngestTelemetryRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Folds the latest power reading of every named meter into one aggregate.</summary>
-    AggregateLoad GetAggregateLoad(IEnumerable<Guid> sensorProfileIds);
+    Task<AggregateLoad> GetAggregateLoadAsync(IEnumerable<Guid> sensorProfileIds, CancellationToken cancellationToken = default);
 
     /// <summary>Aggregate draw of every meter deployed in one zone.</summary>
-    AggregateLoad GetZoneLoad(string zone);
+    Task<AggregateLoad> GetZoneLoadAsync(string zone, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Delta between two meters. Returns null when either meter is unknown or has
     /// never reported power; throws when the two report in incompatible units.
     /// </summary>
-    LoadComparison? CompareLoad(Guid leftSensorId, Guid rightSensorId);
+    Task<LoadComparison?> CompareLoadAsync(Guid leftSensorId, Guid rightSensorId, CancellationToken cancellationToken = default);
 
     /// <summary>Builds the live deployment tree and validates it recursively.</summary>
-    DeploymentValidationReport ValidateDeployment(string? zone = null);
+    Task<DeploymentValidationReport> ValidateDeploymentAsync(string? zone = null, CancellationToken cancellationToken = default);
 
     /// <summary>Validates a proposed, not-yet-deployed configuration profile.</summary>
-    DeploymentValidationReport ValidateDeployment(DeploymentNode root);
+    Task<DeploymentValidationReport> ValidateDeploymentAsync(DeploymentNode root, CancellationToken cancellationToken = default);
 }

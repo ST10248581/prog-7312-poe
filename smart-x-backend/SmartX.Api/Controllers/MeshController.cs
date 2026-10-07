@@ -23,43 +23,43 @@ public class MeshController : ControllerBase
 
     /// <summary>Accepts a gateway buffer flush: sequential batches of raw samples.</summary>
     [HttpPost("sensors/{sensorId:guid}/ingest")]
-    public IActionResult Ingest(Guid sensorId, [FromBody] IngestTelemetryRequest request)
+    public async Task<IActionResult> Ingest(Guid sensorId, [FromBody] IngestTelemetryRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.SourceIpAddress))
         {
             request.SourceIpAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "0.0.0.0";
         }
 
-        var result = _engine.IngestHistoricalBatches(sensorId, request);
+        var result = await _engine.IngestHistoricalBatchesAsync(sensorId, request, cancellationToken);
         return result is null ? NotFound() : Ok(result);
     }
 
     /// <summary>Aggregate draw of the selected meters.</summary>
     [HttpGet("load")]
-    public IActionResult GetAggregateLoad([FromQuery] List<Guid> sensorIds)
+    public async Task<IActionResult> GetAggregateLoad([FromQuery] List<Guid> sensorIds, CancellationToken cancellationToken)
     {
         if (sensorIds.Count == 0)
         {
             return BadRequest("Supply at least one sensorIds value.");
         }
 
-        return Ok(_engine.GetAggregateLoad(sensorIds));
+        return Ok(await _engine.GetAggregateLoadAsync(sensorIds, cancellationToken));
     }
 
     /// <summary>Aggregate draw of every meter in one zone.</summary>
     [HttpGet("load/zone/{zone}")]
-    public IActionResult GetZoneLoad(string zone)
+    public async Task<IActionResult> GetZoneLoad(string zone, CancellationToken cancellationToken)
     {
-        return Ok(_engine.GetZoneLoad(zone));
+        return Ok(await _engine.GetZoneLoadAsync(zone, cancellationToken));
     }
 
     /// <summary>Delta between two meters.</summary>
     [HttpGet("load/compare")]
-    public IActionResult CompareLoad([FromQuery] Guid left, [FromQuery] Guid right)
+    public async Task<IActionResult> CompareLoad([FromQuery] Guid left, [FromQuery] Guid right, CancellationToken cancellationToken)
     {
         try
         {
-            var comparison = _engine.CompareLoad(left, right);
+            var comparison = await _engine.CompareLoadAsync(left, right, cancellationToken);
             return comparison is null ? NotFound() : Ok(comparison);
         }
         catch (InvalidOperationException exception)
@@ -71,15 +71,15 @@ public class MeshController : ControllerBase
 
     /// <summary>Validates the deployment tree the mesh is currently registered as.</summary>
     [HttpGet("deployment")]
-    public IActionResult ValidateDeployment([FromQuery] string? zone)
+    public async Task<IActionResult> ValidateDeployment([FromQuery] string? zone, CancellationToken cancellationToken)
     {
-        return Ok(_engine.ValidateDeployment(zone));
+        return Ok(await _engine.ValidateDeploymentAsync(zone, cancellationToken));
     }
 
     /// <summary>Validates a proposed configuration profile before it is rolled out.</summary>
     [HttpPost("deployment/validate")]
-    public IActionResult ValidateDeployment([FromBody] DeploymentNode root)
+    public async Task<IActionResult> ValidateDeployment([FromBody] DeploymentNode root, CancellationToken cancellationToken)
     {
-        return Ok(_engine.ValidateDeployment(root));
+        return Ok(await _engine.ValidateDeploymentAsync(root, cancellationToken));
     }
 }

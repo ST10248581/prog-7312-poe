@@ -1339,3 +1339,374 @@
   color: var(--accent);
   border-color: var(--accent-border);
 }
+
+/* ============================================================
+   Part 2 additions: undo/redo controls, intake capacity and
+   set changes, device lookup, timeline range read, suggestion
+   feedback and the learning panel.
+   ============================================================ */
+
+/* ---------- Suggestions column ---------- */
+
+.insights-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* ---------- Undo / redo ---------- */
+
+.override-undo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.override-undo-controls {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.override-undo-controls .override-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.override-btn-redo {
+  border: 1px solid rgb(var(--info-rgb) / 0.45);
+  background: rgb(var(--info-rgb) / 0.12);
+  color: var(--info);
+}
+
+.override-btn-redo:hover:not(:disabled) { background: rgb(var(--info-rgb) / 0.2); }
+
+.override-redo-next {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+/* ---------- Intake: capacity, bypass, set changes ---------- */
+
+.pipeline-lane-capacity {
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.pipeline-capacity {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  overflow: hidden;
+  margin: 0.2rem 0;
+}
+
+.pipeline-capacity-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width var(--duration-slow) var(--ease-out);
+}
+
+.pipeline-capacity-warning .pipeline-capacity-fill { background: var(--warning); }
+.pipeline-capacity-danger .pipeline-capacity-fill { background: var(--danger); }
+
+.pipeline-bypass {
+  margin-top: 0.2rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--danger-text);
+}
+
+.pipeline-counters .pipeline-dropped {
+  color: var(--warning);
+}
+
+.pipeline-diff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  font-size: 0.6875rem;
+  animation: pipeline-diff-in var(--duration) var(--ease-out);
+}
+
+@keyframes pipeline-diff-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pipeline-diff-title {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pipeline-diff-down { color: var(--danger-text); font-family: var(--mono); }
+.pipeline-diff-up { color: var(--accent); font-family: var(--mono); }
+.pipeline-diff-meta { margin-left: auto; color: var(--text-muted); }
+
+.pipeline-attention {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.pipeline-chip-dupes {
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-xs);
+  background: rgb(var(--warning-rgb) / 0.15);
+  color: var(--warning-text);
+  font-size: 0.5625rem;
+}
+
+.pipeline-chip.is-new {
+  box-shadow: 0 0 0 2px rgb(var(--danger-rgb) / 0.45);
+}
+
+.pipeline-simulate-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ---------- Device lookup ---------- */
+
+.device-lookup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.device-lookup-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.device-lookup-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.device-lookup-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.device-lookup-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  font-size: 0.75rem;
+}
+
+.device-lookup-result.hit { border-color: var(--accent-border); }
+.device-lookup-result.miss { border-color: rgb(var(--warning-rgb) / 0.4); color: var(--warning-text); }
+
+.device-lookup-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+}
+
+.device-lookup-summary strong { color: var(--accent); font-family: var(--mono); }
+.device-lookup-meta { color: var(--text-muted); }
+
+.device-lookup-clear {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+}
+
+.device-lookup-clear:hover { color: var(--text-primary); }
+
+/* ---------- Timeline range read ---------- */
+
+.node-timeline-windows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.node-timeline-range {
+  margin: -0.25rem 0 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.node-timeline-range strong {
+  font-family: var(--mono);
+  color: var(--text-secondary);
+}
+
+/* ---------- Suggestion feedback ---------- */
+
+.suggestion-confidence-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.suggestion-confidence-bar > div {
+  height: 100%;
+  background: var(--suggest-tone, var(--accent));
+}
+
+.suggestion-because {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.suggestion-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+/* ---------- Learning panel ---------- */
+
+.learning-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.learning-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+  gap: var(--space-2);
+}
+
+.learning-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.learning-stat-value {
+  font-family: var(--mono);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.learning-stat-label {
+  font-size: 0.625rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.learning-acceptance {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.learning-acceptance > div {
+  height: 100%;
+  background: var(--accent-gradient);
+  transition: width var(--duration-slow) var(--ease-out);
+}
+
+.learning-subtitle {
+  font-size: 0.75rem;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+}
+
+.learning-rules,
+.learning-activity {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.learning-rule {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.learning-rule strong { color: var(--text-primary); font-weight: 600; }
+
+.learning-rule-numbers {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--accent);
+}
+
+.learning-activity li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.learning-activity-age {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
+.learning-reset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.learning-reset .override-btn {
+  flex: 0 0 auto;
+}

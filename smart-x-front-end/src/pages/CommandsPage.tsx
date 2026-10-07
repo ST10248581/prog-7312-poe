@@ -3,6 +3,7 @@ import CommandFilterBar from "../components/commands/CommandFilterBar";
 import CommandHistoryTable from "../components/commands/CommandHistoryTable";
 import CommandStream from "../components/commands/CommandStream";
 import IngestPipeline from "../components/commands/IngestPipeline";
+import LearningPanel from "../components/commands/LearningPanel";
 import LiveDevicePanel from "../components/commands/LiveDevicePanel";
 import NodeTimeline from "../components/commands/NodeTimeline";
 import OverrideConsole from "../components/commands/OverrideConsole";
@@ -10,6 +11,7 @@ import type { OverrideDraft } from "../components/commands/OverrideConsole";
 import SuggestedActions from "../components/commands/SuggestedActions";
 import ThroughputStrip from "../components/commands/ThroughputStrip";
 import StatTile from "../components/telemetry/StatTile";
+import { useToast } from "../components/toast/toastContext";
 import {
   EMPTY_FILTERS,
   TIME_WINDOWS,
@@ -19,6 +21,7 @@ import {
 } from "../components/commands/types";
 import type { CommandFilters, CommandRecord } from "../components/commands/types";
 import {
+  ApiError,
   dispatchCommand,
   getCommandFilterOptions,
   getCommandStream,
@@ -31,23 +34,32 @@ import {
   getPipelineStatus,
   ingestStreamPackets,
   recordActivity,
+  redoLastUndo,
+  resetLearning,
+  sendSuggestionFeedback,
   undoLastOverride,
 } from "../services/apiService";
 import type {
   CommandFilterOptions,
+  CommandStatus,
   CommandSummary,
+  CommandType,
   DeviceCommand,
   DispatchCommandRequest,
   InsightsResponse,
   LiveDeviceResult,
+  NodeAlertState,
   NodeTimeline as NodeTimelineData,
-  OverrideHistoryEntry,
+  OverrideHistory,
   PagedResult,
   PipelineStatus,
+  SensorCategory,
   StreamPacketRequest,
   SuggestedAction,
 } from "../services/apiService";
-import { formatNumber, formatTime } from "../utils/format";
+import { isAbortError, usePolling } from "../hooks/usePolling";
+import { usePersistentState } from "../state/appState";
+import { formatNumber, formatTime, humanise } from "../utils/format";
 // Shared widget styles — stat tiles, filter chips, panels and .data-table all
 // live in the telemetry sheet. Imported explicitly so this route does not rely
 // on the telemetry route having been loaded first.
@@ -60,6 +72,53 @@ const STREAM_SIZE = 40;
 /** The backend issues and settles commands on a 2s tick, so poll to match. */
 const REFRESH_MS = 3_000;
 
+/** A learned suggestion at least this confident is announced with a toast, before the operator looks for it. */
+const PROACTIVE_CONFIDENCE = 0.75;
+
+const EMPTY_HISTORY: OverrideHistory = { undo: [], redo: [] };
+
+/** Filter values switched on between two filter states, as "facet:value" — the query history the engine learns from. */
+function newlyEnabledFilters(previous: CommandFilters, next: CommandFilters): string[] {
+  const added: string[] = [];
+  const diff = (facet: string, before: readonly string[], after: readonly string[]) =>
+    after.filter((value) => !before.includes(value)).forEach((value) => added.push(`${facet}:${value}`));
+
+  diff("sensorCategory", previous.sensorCategories, next.sensorCategories);
+  diff("alertState", previous.alertStates, next.alertStates);
+  diff("status", previous.statuses, next.statuses);
+  diff("commandType", previous.commandTypes, next.commandTypes);
+  if (next.zone && next.zone !== previous.zone) {
+    added.push(`zone:${next.zone}`);
+  }
+  return added;
+}
+
+/** Applies a learned filter suggestion to the current filters. */
+function withFilter(filters: CommandFilters, facet: string, value: string): CommandFilters {
+  const addTo = <T extends string>(list: T[]) => (list.includes(value as T) ? list : [...list, value as T]);
+
+  switch (facet) {
+    case "zone":
+      return { ...filters, zone: value };
+    case "sensorCategory":
+      return { ...filters, sensorCategories: addTo<SensorCategory>(filters.sensorCategories) };
+    case "alertState":
+      return { ...filters, alertStates: addTo<NodeAlertState>(filters.alertStates) };
+    case "status":
+      return { ...filters, statuses: addTo<CommandStatus>(filters.statuses) };
+    case "commandType":
+      return { ...filters, commandTypes: addTo<CommandType>(filters.commandTypes) };
+    default:
+      return filters;
+  }
+}
+
+/** An unreachable API is announced app-wide by ApiStatusBanner; only the API's own rejections are shown here. */
+function describeError(err: unknown, fallback: string): string | null {
+  if (err instanceof ApiError && err.isUnreachable) return null;
+  return err instanceof Error ? err.message : fallback;
+}
+
 /**
  * Real-Time Command Stream and History.
  *
@@ -68,53 +127,65 @@ const REFRESH_MS = 3_000;
  * the filter state, sends it as one query to `/api/commands/*` and renders
  * exactly what comes back. Nothing is narrowed, sorted or paged in the browser.
  *
- * The stream is genuinely live rather than a static snapshot — the API's
- * dispatch simulator issues automated traffic and advances in-flight commands,
- * so a page left open sees rows arrive and pending ones settle.
+ * State that should survive moving to another module — filters, page, live
+ * toggle, target node, timeline window, dismissed suggestions and the last data
+ * shown — is held in the app state store, so returning here restores the page
+ * exactly. Polling never overlaps, is cancelled when the page unmounts, and
+ * rests while the browser tab is hidden.
  */
 function CommandsPage() {
-  const [filters, setFilters] = useState<CommandFilters>(EMPTY_FILTERS);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [targetNode, setTargetNode] = useState("");
-  const [live, setLive] = useState(true);
-  const [page, setPage] = useState(1);
+  const toast = useToast();
 
-  const [summary, setSummary] = useState<CommandSummary | null>(null);
-  const [stream, setStream] = useState<DeviceCommand[]>([]);
-  const [history, setHistory] = useState<PagedResult<DeviceCommand> | null>(null);
-  const [options, setOptions] = useState<CommandFilterOptions | null>(null);
-  const [devices, setDevices] = useState<LiveDeviceResult | null>(null);
+  /* ---------- Operator choices: kept across navigation and reloads ---------- */
+  const [filters, setFilters] = usePersistentState<CommandFilters>("commands.filters", EMPTY_FILTERS, { session: true });
+  const [page, setPage] = usePersistentState("commands.page", 1, { session: true });
+  const [live, setLive] = usePersistentState("commands.live", true, { session: true });
+  const [targetNode, setTargetNode] = usePersistentState("commands.targetNode", "", { session: true });
+  const [timelineMinutes, setTimelineMinutes] = usePersistentState("commands.timelineMinutes", 60, { session: true });
+  const [dismissed, setDismissed] = usePersistentState<string[]>("commands.dismissed", [], { session: true });
+  const [selectedId, setSelectedId] = usePersistentState<string | null>("commands.selectedId", null);
+
+  /* ---------- Last data shown: kept across navigation, refreshed on return ---------- */
+  const [summary, setSummary] = usePersistentState<CommandSummary | null>("commands.summary", null);
+  const [stream, setStream] = usePersistentState<DeviceCommand[]>("commands.stream", []);
+  const [history, setHistory] = usePersistentState<PagedResult<DeviceCommand> | null>("commands.history", null);
+  const [options, setOptions] = usePersistentState<CommandFilterOptions | null>("commands.options", null);
+  const [devices, setDevices] = usePersistentState<LiveDeviceResult | null>("commands.devices", null);
+  const [pipeline, setPipeline] = usePersistentState<PipelineStatus | null>("commands.pipeline", null);
+  const [overrides, setOverrides] = usePersistentState<OverrideHistory>("commands.overrides", EMPTY_HISTORY);
+  const [insights, setInsights] = usePersistentState<InsightsResponse | null>("commands.insights", null);
+  const [timeline, setTimeline] = usePersistentState<NodeTimelineData | null>("commands.timeline", null);
+  const [lastRefresh, setLastRefresh] = usePersistentState<Date | null>("commands.lastRefresh", null);
+
+  /** The disconnected set as of the last poll; the API diffs the current one against it. */
+  const [knownDisconnected, setKnownDisconnected] = usePersistentState<string[] | undefined>(
+    "commands.knownDisconnected",
+    undefined
+  );
+  /** Suggestions already announced with a toast this session. */
+  const [notified, setNotified] = usePersistentState<string[]>("commands.notified", [], { session: true });
+
   const [devicesError, setDevicesError] = useState<string | null>(null);
-
-  // The command engine's side of the page: intake, undo stack, insights and
-  // the selected node's timeline.
-  const [pipeline, setPipeline] = useState<PipelineStatus | null>(null);
-  const [overrides, setOverrides] = useState<OverrideHistoryEntry[]>([]);
-  const [insights, setInsights] = useState<InsightsResponse | null>(null);
-  const [timeline, setTimeline] = useState<NodeTimelineData | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [draft, setDraft] = useState<OverrideDraft | null>(null);
+  const [loading, setLoading] = useState(summary === null);
+  const [error, setError] = useState<string | null>(null);
 
-  /** The last search sent to the action engine, so a poll never re-reports it. */
-  const reportedSearch = useRef("");
   const consoleRef = useRef<HTMLDivElement>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  /* ---------- Loaders: each takes the poll's AbortSignal ---------- */
 
-  // `loading` covers the first paint only; live refreshes swap data in place
-  // rather than flashing the panels back to a loading state.
   const loadCommands = useCallback(
-    async (activeFilters: CommandFilters, activePage: number) => {
+    async (activeFilters: CommandFilters, activePage: number, signal?: AbortSignal) => {
       const query = toCommandQuery(activeFilters);
 
       try {
         const [summaryData, streamData, historyData] = await Promise.all([
-          getCommandSummary(query),
-          getCommandStream(query, STREAM_SIZE),
-          getCommands(query, activePage, PAGE_SIZE),
+          getCommandSummary(query, signal),
+          getCommandStream(query, STREAM_SIZE, signal),
+          getCommands(query, activePage, PAGE_SIZE, signal),
         ]);
+        if (signal?.aborted) return;
 
         setSummary(summaryData);
         setStream(streamData);
@@ -122,128 +193,139 @@ function CommandsPage() {
         setLastRefresh(new Date());
         setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to reach the Smart-X API");
+        if (isAbortError(err)) return;
+        setError(describeError(err, "Request failed."));
       } finally {
         setLoading(false);
       }
     },
-    [],
+    [setSummary, setStream, setHistory, setLastRefresh]
   );
 
   // The live device panel takes the device half of the same filter. It fails
   // on its own, so a device hiccup never blanks the command stream.
-  const loadDevices = useCallback(async (activeFilters: CommandFilters) => {
-    try {
-      setDevices(await getLiveDevices(toDeviceQuery(activeFilters)));
-      setDevicesError(null);
-    } catch (err) {
-      setDevicesError(err instanceof Error ? err.message : "Unable to load devices.");
-    }
-  }, []);
+  const loadDevices = useCallback(
+    async (activeFilters: CommandFilters, signal?: AbortSignal) => {
+      try {
+        const data = await getLiveDevices(toDeviceQuery(activeFilters), signal);
+        if (signal?.aborted) return;
+        setDevices(data);
+        setDevicesError(null);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        setDevicesError(err instanceof Error ? err.message : "Unable to load devices.");
+      }
+    },
+    [setDevices]
+  );
 
-  // Refetch whenever the filters or the page change. The rule below sees
-  // setState inside loadCommands and assumes it runs synchronously; every call
-  // sits after an await, and fetching from the API is exactly the
-  // external-system case the rule carves out.
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    loadCommands(filters, page);
-  }, [filters, page, loadCommands]);
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    loadDevices(filters);
-  }, [filters, loadDevices]);
-
-  // Live polling: the real-time feedback loop.
-  useEffect(() => {
-    if (!live) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      loadCommands(filters, page);
-      loadDevices(filters);
-    }, REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [live, filters, page, loadCommands, loadDevices]);
+  /** Announces a confident learned suggestion before the operator goes looking for it. */
+  const announce = useRef<(data: InsightsResponse) => void>(() => undefined);
 
   // The engine panels are independent of the command filter, and each fails
   // on its own: an insights hiccup must not blank the intake panel.
-  const loadEngine = useCallback(async () => {
-    const [pipelineData, overrideData, insightData, optionData] = await Promise.allSettled([
-      getPipelineStatus(),
-      getOverrideHistory(),
-      getInsights(),
-      // Re-read, not fetched once: a node that drops off the mesh has to leave
-      // the target list, and one that comes back has to rejoin it.
-      getCommandFilterOptions(),
-    ]);
+  const loadEngine = useCallback(
+    async (signal?: AbortSignal) => {
+      const [pipelineData, overrideData, insightData, optionData] = await Promise.allSettled([
+        getPipelineStatus(knownDisconnected, signal),
+        getOverrideHistory(signal),
+        getInsights(undefined, signal),
+        // Re-read, not fetched once: a node that drops off the mesh has to leave
+        // the target list, and one that comes back has to rejoin it.
+        getCommandFilterOptions(signal),
+      ]);
+      if (signal?.aborted) return;
 
-    if (pipelineData.status === "fulfilled") setPipeline(pipelineData.value);
-    if (overrideData.status === "fulfilled") setOverrides(overrideData.value);
-    if (insightData.status === "fulfilled") setInsights(insightData.value);
-    if (optionData.status === "fulfilled") setOptions(optionData.value);
-  }, []);
+      if (pipelineData.status === "fulfilled") {
+        setPipeline(pipelineData.value);
+        setKnownDisconnected(pipelineData.value.disconnectedNodes.map((node) => node.nodeId));
+      }
+      if (overrideData.status === "fulfilled") setOverrides(overrideData.value);
+      if (insightData.status === "fulfilled") {
+        setInsights(insightData.value);
+        announce.current(insightData.value);
+      }
+      if (optionData.status === "fulfilled") setOptions(optionData.value);
+    },
+    [knownDisconnected, setPipeline, setKnownDisconnected, setOverrides, setInsights, setOptions]
+  );
 
-  const loadTimeline = useCallback(async (nodeId: string) => {
-    if (!nodeId) {
-      setTimeline(null);
-      return;
-    }
+  const loadTimeline = useCallback(
+    async (nodeId: string, minutes: number, signal?: AbortSignal) => {
+      if (!nodeId) {
+        setTimeline(null);
+        return;
+      }
 
-    try {
-      const data = await getNodeTimeline(nodeId);
-      setTimeline(data);
-      setTimelineError(null);
-    } catch (err) {
-      setTimelineError(err instanceof Error ? err.message : "Unable to load the node's timeline.");
-    }
-  }, []);
+      try {
+        const data = await getNodeTimeline(nodeId, minutes, 120, signal);
+        if (signal?.aborted) return;
+        setTimeline(data);
+        setTimelineError(null);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        setTimelineError(err instanceof Error ? err.message : "Unable to load the node's timeline.");
+      }
+    },
+    [setTimeline]
+  );
 
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    loadEngine();
-  }, [loadEngine]);
+  /* ---------- Polling: immediate on change, then every REFRESH_MS while live ---------- */
 
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    loadTimeline(targetNode);
-  }, [targetNode, loadTimeline]);
+  usePolling((signal) => loadCommands(filters, page, signal), {
+    intervalMs: REFRESH_MS,
+    live,
+    key: JSON.stringify([filters, page]),
+  });
 
-  useEffect(() => {
-    if (!live) {
-      return;
-    }
+  usePolling((signal) => loadDevices(filters, signal), {
+    intervalMs: REFRESH_MS,
+    live,
+    key: JSON.stringify(filters),
+  });
 
-    const timer = window.setInterval(() => {
-      loadEngine();
-      loadTimeline(targetNode);
-    }, REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [live, targetNode, loadEngine, loadTimeline]);
+  usePolling((signal) => loadEngine(signal), { intervalMs: REFRESH_MS, live });
+
+  usePolling((signal) => loadTimeline(targetNode, timelineMinutes, signal), {
+    intervalMs: REFRESH_MS,
+    live,
+    key: `${targetNode}|${timelineMinutes}`,
+  });
+
+  const refreshAfterAction = useCallback(
+    () => Promise.all([loadCommands(filters, page), loadEngine()]),
+    [loadCommands, loadEngine, filters, page]
+  );
+
+  /* ---------- Filters: every value switched on is query history the engine learns from ---------- */
 
   // Memoised because the filter bar debounces the search box against it: a new
   // identity on every poll would reset that timer before it ever fired.
-  const handleFilterChange = useCallback((next: CommandFilters) => {
-    setFilters(next);
-    // A new slice invalidates the page cursor.
-    setPage(1);
+  const handleFilterChange = useCallback(
+    (next: CommandFilters) => {
+      // A committed search, and each filter value newly switched on, is
+      // reported once — the same state arriving again is not news.
+      const term = next.search.trim();
+      if (term !== "" && term !== filters.search.trim()) {
+        recordActivity("Search", term);
+      }
+      newlyEnabledFilters(filters, next).forEach((facet) => recordActivity("Filter", facet));
 
-    // A committed search is something the action engine learns from. Only the
-    // change is reported; the same term arriving again on a poll is not news.
-    const term = next.search.trim();
-    if (term !== "" && term !== reportedSearch.current) {
-      recordActivity("Search", term);
-    }
-    reportedSearch.current = term;
-  }, []);
+      setFilters(next);
+      // A new slice invalidates the page cursor.
+      setPage(1);
+    },
+    [filters, setFilters, setPage]
+  );
 
   /** Points the console and the timeline at a node, and tells the engine it was inspected. */
-  const focusNode = useCallback((nodeId: string) => {
-    setTargetNode(nodeId);
-    recordActivity("SelectNode", nodeId);
-  }, []);
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      setTargetNode(nodeId);
+      recordActivity("SelectNode", nodeId);
+    },
+    [setTargetNode]
+  );
 
   // Selecting a row aims the override console at that node — correcting a bad
   // command should not mean retyping its target.
@@ -252,43 +334,183 @@ function CommandsPage() {
     focusNode(command.nodeId);
   };
 
+  /* ---------- Overrides: dispatch, undo, redo ---------- */
+
   // A queued override belongs in the stream immediately, not on the next tick.
   const handleDispatch = useCallback(
     async (request: DispatchCommandRequest) => {
       const command = await dispatchCommand(request);
-      await Promise.all([loadCommands(filters, page), loadEngine()]);
+      await refreshAfterAction();
       return command;
     },
-    [loadCommands, loadEngine, filters, page],
+    [refreshAfterAction]
   );
 
-  const handleUndo = useCallback(async () => {
-    const result = await undoLastOverride();
-    await Promise.all([loadCommands(filters, page), loadEngine()]);
-    return result;
-  }, [loadCommands, loadEngine, filters, page]);
+  const handleUndo = useCallback(
+    async (expectedCommandId: string) => {
+      const result = await undoLastOverride(expectedCommandId);
+      await refreshAfterAction();
+      return result;
+    },
+    [refreshAfterAction]
+  );
 
-  /** A suggestion only fills the console; the operator still confirms it. */
-  const handlePrepare = useCallback((suggestion: SuggestedAction) => {
-    if (!suggestion.nodeId || !suggestion.commandType) {
-      return;
+  const handleRedo = useCallback(
+    async (expectedCommandId: string) => {
+      const result = await redoLastUndo(expectedCommandId);
+      await refreshAfterAction();
+      return result;
+    },
+    [refreshAfterAction]
+  );
+
+  /* ---------- Suggestions: apply, edit, dismiss, and feedback ---------- */
+
+  /** Fills the console with a command suggestion so it can be adjusted before sending. */
+  const handlePrepare = useCallback(
+    (suggestion: SuggestedAction) => {
+      if (!suggestion.nodeId || !suggestion.commandType) {
+        return;
+      }
+
+      setTargetNode(suggestion.nodeId);
+      setDraft({
+        key: `${suggestion.id}:${Date.now()}`,
+        commandType: suggestion.commandType,
+        parameters: suggestion.parameters ?? "",
+        priority: suggestion.priority ?? "High",
+        dryRun: suggestion.dryRun,
+        source: suggestion.reason,
+      });
+      consoleRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
+    [setTargetNode]
+  );
+
+  /**
+   * One-click apply. Does what the suggestion says, then tells the engine it
+   * was taken, which lifts it in later rankings. A sent command is on the undo
+   * stack straight away, and the toast offers to undo it.
+   */
+  const handleApply = useCallback(
+    async (suggestion: SuggestedAction) => {
+      sendSuggestionFeedback(suggestion.id, "Applied");
+
+      if (suggestion.commandType && suggestion.nodeId) {
+        try {
+          const command = await handleDispatch({
+            nodeId: suggestion.nodeId,
+            commandType: suggestion.commandType,
+            parameters: suggestion.parameters ?? "",
+            priority: suggestion.priority ?? "High",
+            dryRun: suggestion.dryRun,
+          });
+          setTargetNode(suggestion.nodeId);
+          toast.show({
+            tone: "success",
+            title: `${humanise(command.commandType)} queued for ${command.nodeId}`,
+            message: command.isDryRun ? "Logged as a dry run: the node is offline." : `${command.parameters} · on the undo stack`,
+            actions: command.isDryRun ? undefined : [{ label: "Undo", onClick: () => void handleUndo(command.id).catch(() => undefined) }],
+          });
+        } catch (err) {
+          toast.show({
+            tone: "error",
+            title: "Suggestion not applied",
+            message: err instanceof Error ? err.message : "The command was rejected.",
+          });
+        }
+        return;
+      }
+
+      if (suggestion.searchTerm) {
+        handleFilterChange({ ...filters, search: suggestion.searchTerm });
+      } else if (suggestion.filterFacet && suggestion.filterValue) {
+        handleFilterChange(withFilter(filters, suggestion.filterFacet, suggestion.filterValue));
+      } else if (suggestion.nodeId) {
+        focusNode(suggestion.nodeId);
+      }
+      void loadEngine();
+    },
+    [handleDispatch, handleUndo, handleFilterChange, filters, focusNode, loadEngine, setTargetNode, toast]
+  );
+
+  const handleDismiss = useCallback(
+    (suggestion: SuggestedAction) => {
+      setDismissed((current) => (current.includes(suggestion.id) ? current : [...current, suggestion.id]));
+      sendSuggestionFeedback(suggestion.id, "Dismissed").then(() => loadEngine());
+    },
+    [setDismissed, loadEngine]
+  );
+
+  const handleResetLearning = useCallback(async () => {
+    try {
+      await resetLearning();
+      setDismissed([]);
+      setNotified([]);
+      await loadEngine();
+      toast.show({ tone: "info", title: "Learning reset", message: "The engine now starts from an empty history." });
+    } catch (err) {
+      toast.show({ tone: "error", title: "Could not reset", message: err instanceof Error ? err.message : "" });
     }
+  }, [setDismissed, setNotified, loadEngine, toast]);
 
-    setTargetNode(suggestion.nodeId);
-    setDraft({
-      key: `${suggestion.id}:${Date.now()}`,
-      commandType: suggestion.commandType,
-      parameters: suggestion.parameters ?? "",
-      priority: suggestion.priority ?? "High",
-      dryRun: suggestion.dryRun,
-      source: suggestion.reason,
+  // Proactive alert: the first time a learned suggestion is confident enough,
+  // say so with a toast, wherever the operator is looking on the page. Kept in
+  // a ref (refreshed every render) so the engine loader always sees the latest
+  // notified and dismissed lists without being recreated.
+  const announceSuggestion = (data: InsightsResponse) => {
+    const fresh = data.suggestions.find(
+      (suggestion) =>
+        suggestion.kind !== "ProblemDevice" &&
+        suggestion.confidence >= PROACTIVE_CONFIDENCE &&
+        !notified.includes(suggestion.id) &&
+        !dismissed.includes(suggestion.id)
+    );
+    if (!fresh) return;
+
+    setNotified((current) => [...current, fresh.id]);
+    toast.show({
+      tone: "insight",
+      title: `Likely next: ${fresh.title}`,
+      message: `${Math.round(fresh.confidence * 100)}% confident. Because ${fresh.reason.charAt(0).toLowerCase()}${fresh.reason.slice(1)}`,
+      durationMs: 12_000,
+      actions: [
+        { label: "Apply", onClick: () => void handleApply(fresh) },
+        { label: "Dismiss", onClick: () => handleDismiss(fresh) },
+      ],
     });
-    consoleRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
+  };
 
-  const handleSuggestedSearch = useCallback(
-    (term: string) => handleFilterChange({ ...filters, search: term }),
-    [filters, handleFilterChange],
+  useEffect(() => {
+    announce.current = announceSuggestion;
+  });
+
+  /* ---------- Intake simulations ---------- */
+
+  const powerNode = useCallback(() => {
+    const nodes = options?.nodes ?? [];
+    const node = [targetNode, ...nodes].find((nodeId) => /^(PWR|ACT|NET)-/.test(nodeId)) ?? nodes[0];
+    if (!node) {
+      throw new Error("No reachable node to send packets for.");
+    }
+    return node;
+  }, [options, targetNode]);
+
+  const sendPackets = useCallback(
+    async (routineCount: number) => {
+      const node = powerNode();
+      const routine: StreamPacketRequest[] = Array.from({ length: routineCount }, () => ({
+        nodeId: node,
+        readingType: "Power",
+        value: 1.5 + Math.random(),
+      }));
+      const spike: StreamPacketRequest = { nodeId: node, readingType: "Power", value: 12 };
+
+      const result = await ingestStreamPackets([...routine, spike]);
+      await Promise.all([refreshAfterAction(), loadDevices(filters)]);
+      return result;
+    },
+    [powerNode, refreshAfterAction, loadDevices, filters]
   );
 
   /**
@@ -296,26 +518,13 @@ function CommandsPage() {
    * whatever is already there, while the spike posted after it is processed
    * before the response even comes back.
    */
-  const handleSimulateSpike = useCallback(async () => {
-    const nodes = options?.nodes ?? [];
-    const powerNode =
-      [targetNode, ...nodes].find((nodeId) => /^(PWR|ACT|NET)-/.test(nodeId)) ?? nodes[0];
+  const handleSimulateSpike = useCallback(() => sendPackets(20), [sendPackets]);
 
-    if (!powerNode) {
-      throw new Error("No reachable node to send packets for.");
-    }
-
-    const routine: StreamPacketRequest[] = Array.from({ length: 20 }, () => ({
-      nodeId: powerNode,
-      readingType: "Power",
-      value: 1.5 + Math.random(),
-    }));
-    const spike: StreamPacketRequest = { nodeId: powerNode, readingType: "Power", value: 12 };
-
-    const result = await ingestStreamPackets([...routine, spike]);
-    await Promise.all([loadCommands(filters, page), loadEngine(), loadDevices(filters)]);
-    return result;
-  }, [options, targetNode, loadCommands, loadEngine, loadDevices, filters, page]);
+  /** Demonstrates backpressure: more routine packets than the queue holds, so the oldest are shed. */
+  const handleSimulateFlood = useCallback(
+    () => sendPackets((pipeline?.standardQueueCapacity ?? 1_000) + 200),
+    [sendPackets, pipeline]
+  );
 
   const windowLabel =
     TIME_WINDOWS.find((window) => window.minutes === filters.windowMinutes)?.label ?? "1h";
@@ -361,15 +570,14 @@ function CommandsPage() {
             {live ? "Live" : "Paused"}
           </button>
           <span className="page-refresh">
-            {lastRefresh ? `Updated ${formatTime(lastRefresh.toISOString())}` : "Connecting…"}
+            {lastRefresh ? `Updated ${formatTime(new Date(lastRefresh).toISOString())}` : "Connecting…"}
           </span>
         </div>
       </header>
 
       {error && (
-        <div className="page-error">
-          <strong>API unreachable.</strong> {error} — start the backend with{" "}
-          <code>dotnet run</code> in <code>smart-x-backend/SmartX.Api</code>.
+        <div className="page-error" role="alert">
+          <strong>The command stream could not refresh.</strong> {error}
         </div>
       )}
 
@@ -469,16 +677,23 @@ function CommandsPage() {
       {/* Predict → act: the engine's suggestions sit above the filter, so the
           next move is on screen before the operator has to search for it. */}
       <div className="insights-grid">
-        <SuggestedActions
-          insights={insights}
-          onPrepare={handlePrepare}
-          onSearch={handleSuggestedSearch}
-          onInspect={focusNode}
-        />
+        <div className="insights-main">
+          <SuggestedActions
+            insights={insights}
+            dismissed={dismissed}
+            onApply={handleApply}
+            onPrepare={handlePrepare}
+            onDismiss={handleDismiss}
+            onInspect={focusNode}
+          />
+
+          <LearningPanel insights={insights} onReset={handleResetLearning} />
+        </div>
 
         <IngestPipeline
           pipeline={pipeline}
           onSimulateSpike={handleSimulateSpike}
+          onSimulateFlood={handleSimulateFlood}
           onInspect={focusNode}
         />
       </div>
@@ -507,7 +722,7 @@ function CommandsPage() {
         onInspect={focusNode}
       />
 
-      {/* Scroll target for "Prepare" on a suggestion. A sibling rather than a
+      {/* Scroll target for "Edit first" on a suggestion. A sibling rather than a
           wrapper, which would stop the console sticking. */}
       <div ref={consoleRef} className="commands-anchor" aria-hidden="true" />
 
@@ -522,7 +737,13 @@ function CommandsPage() {
           />
 
           {targetNode && (
-            <NodeTimeline nodeId={targetNode} timeline={timeline} error={timelineError} />
+            <NodeTimeline
+              nodeId={targetNode}
+              timeline={timeline?.nodeId === targetNode ? timeline : null}
+              error={timelineError}
+              windowMinutes={timelineMinutes}
+              onWindowChange={setTimelineMinutes}
+            />
           )}
         </div>
 
@@ -535,6 +756,7 @@ function CommandsPage() {
           onTargetChange={setTargetNode}
           onDispatch={handleDispatch}
           onUndo={handleUndo}
+          onRedo={handleRedo}
         />
       </div>
 

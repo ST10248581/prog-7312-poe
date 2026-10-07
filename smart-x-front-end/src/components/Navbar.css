@@ -97,29 +97,30 @@
   color: var(--accent);
 }
 
-.nav-link.disabled {
-  color: var(--text-muted);
-  cursor: default;
-}
-
-.nav-link.disabled:hover {
-  background: transparent;
-  color: var(--text-muted);
-}
-
-.nav-link.disabled.active {
-  background: var(--accent-dim);
-  color: var(--text-muted);
-}
-
-.nav-link.disabled.active:hover {
-  background: var(--accent-dim);
-  color: var(--text-muted);
-}
-
-.nav-link-lock {
+/* Live count on a module link: active alerts, or commands in flight. */
+.nav-badge {
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--warning-rgb) / 0.18);
+  color: var(--warning-text);
+  font-family: var(--mono);
   font-size: 0.6875rem;
-  opacity: 0.6;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-badge.critical {
+  background: rgb(var(--danger-rgb) / 0.2);
+  color: var(--danger-text);
+}
+
+.nav-badge.info {
+  background: rgb(var(--info-rgb) / 0.18);
+  color: var(--info);
 }
 
 .nav-status-dot {
@@ -130,9 +131,6 @@
   flex-shrink: 0;
 }
 
-.nav-status-dot.offline {
-  background: var(--text-muted);
-}
 
 /* ---------- Menu toggle ----------
    Hidden on wide screens; responsive.css shows it below the navigation
