@@ -8,11 +8,11 @@
    ============================================================ */
 
 .commands-page {
-  padding: 1.5rem;
+  padding: var(--page-gutter);
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  max-width: 1600px;
+  gap: var(--page-gap);
+  max-width: var(--page-max);
   width: 100%;
   margin: 0 auto;
 }
@@ -38,7 +38,7 @@
    status reads the same wherever it appears. */
 
 .cmd-status-queued { --cmd-tone: var(--text-secondary); }
-.cmd-status-sent { --cmd-tone: #38bdf8; }
+.cmd-status-sent { --cmd-tone: var(--info); }
 .cmd-status-acknowledged { --cmd-tone: var(--accent); }
 .cmd-status-failed { --cmd-tone: var(--danger); }
 .cmd-status-expired { --cmd-tone: var(--warning); }
@@ -151,7 +151,7 @@
 
 .commands-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) var(--sidebar-width);
   gap: 1rem;
   align-items: start;
 }
@@ -179,8 +179,9 @@
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  max-height: 520px;
+  max-height: min(520px, 65vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 0.25rem;
 }
 
@@ -259,7 +260,7 @@
    origin that carries colour. */
 .command-origin.origin-manual {
   color: var(--warning);
-  background: rgba(245, 158, 11, 0.12);
+  background: rgb(var(--warning-rgb) / 0.12);
 }
 
 .command-status {
@@ -420,7 +421,7 @@
   color: var(--accent);
 }
 
-.override-btn-send:hover:not(:disabled) { background: rgba(0, 212, 170, 0.22); }
+.override-btn-send:hover:not(:disabled) { background: rgb(var(--accent-rgb) / 0.22); }
 
 .override-btn-reset {
   background: var(--bg-surface);
@@ -457,8 +458,8 @@
 .override-result-ok strong { color: var(--accent); }
 
 .override-result-error {
-  border-color: rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.12);
+  border-color: rgb(var(--danger-rgb) / 0.35);
+  background: rgb(var(--danger-rgb) / 0.12);
   color: var(--text-secondary);
 }
 
@@ -522,8 +523,9 @@
    compressing nine columns into a phone. */
 .command-history-scroll {
   overflow-x: auto;
-  max-height: 420px;
+  max-height: min(420px, 60vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .command-history-scroll .data-table { min-width: 880px; }
@@ -600,9 +602,9 @@
    One hue per category, shared by the filter chip and the tag on every row, so
    a category reads the same in the filter bar and in the stream. */
 
-.category-configuration { --category-tone: #818cf8; }
+.category-configuration { --category-tone: var(--violet); }
 .category-maintenance { --category-tone: var(--warning); }
-.category-control { --category-tone: #38bdf8; }
+.category-control { --category-tone: var(--info); }
 .category-diagnostics { --category-tone: var(--text-secondary); }
 
 .filter-chip[class*="category-"]::before {
@@ -769,7 +771,7 @@
 
 .insights-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) var(--sidebar-width-wide);
   gap: 1rem;
   align-items: start;
 }
@@ -806,7 +808,7 @@
   border-left: 3px solid var(--suggest-tone);
 }
 
-.suggestion-nextstep { --suggest-tone: #818cf8; }
+.suggestion-nextstep { --suggest-tone: var(--violet); }
 .suggestion-problemdevice { --suggest-tone: var(--warning); }
 
 .suggestion-head {
@@ -882,7 +884,7 @@
   color: var(--accent);
 }
 
-.suggestion-btn-primary:hover { background: rgba(0, 212, 170, 0.22); color: var(--accent); }
+.suggestion-btn-primary:hover { background: rgb(var(--accent-rgb) / 0.22); color: var(--accent); }
 
 .suggestion-btn-dismiss { margin-left: auto; border-color: transparent; color: var(--text-muted); }
 
@@ -918,7 +920,7 @@
   border: 1px solid var(--border);
 }
 
-.pipeline-lane-critical { border-color: rgba(239, 68, 68, 0.35); }
+.pipeline-lane-critical { border-color: rgb(var(--danger-rgb) / 0.35); }
 
 .pipeline-lane-label {
   font-size: 0.625rem;
@@ -1105,12 +1107,12 @@
 }
 
 .override-btn-undo {
-  border: 1px solid rgba(245, 158, 11, 0.45);
-  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgb(var(--warning-rgb) / 0.45);
+  background: rgb(var(--warning-rgb) / 0.12);
   color: var(--warning);
 }
 
-.override-btn-undo:hover:not(:disabled) { background: rgba(245, 158, 11, 0.2); }
+.override-btn-undo:hover:not(:disabled) { background: rgb(var(--warning-rgb) / 0.2); }
 
 .override-undo-list {
   list-style: none;
@@ -1181,11 +1183,11 @@
 .timeline-rail { stroke: var(--border-light); stroke-width: 1; }
 
 .timeline-event { stroke: var(--bg-secondary); stroke-width: 1; }
-.event-command { fill: #38bdf8; background: #38bdf8; }
+.event-command { fill: var(--info); background: var(--info); }
 .event-alert { fill: var(--danger); background: var(--danger); }
 .event-recovered { fill: var(--accent); background: var(--accent); }
 .event-disconnected { fill: var(--warning); background: var(--warning); }
-.event-reconnected { fill: #818cf8; background: #818cf8; }
+.event-reconnected { fill: var(--violet); background: var(--violet); }
 
 .node-timeline-legend {
   display: flex;
@@ -1210,8 +1212,8 @@
 
 .device-category-environmental { --category-tone: var(--accent); }
 .device-category-powerconsumption { --category-tone: var(--warning); }
-.device-category-actuator { --category-tone: #38bdf8; }
-.device-category-motion { --category-tone: #818cf8; }
+.device-category-actuator { --category-tone: var(--info); }
+.device-category-motion { --category-tone: var(--violet); }
 .device-category-connectivity { --category-tone: var(--text-secondary); }
 
 .live-device-grid {

@@ -5,10 +5,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 1.5rem;
+  padding: 0 var(--page-gutter);
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: var(--z-nav);
 }
 
 .navbar-brand {
@@ -28,24 +28,24 @@
 
 .navbar-brand:hover .navbar-brand-icon {
   transform: rotate(30deg) scale(1.1);
-  text-shadow: 0 0 12px var(--accent), 0 0 24px rgba(0, 212, 170, 0.3);
+  text-shadow: 0 0 12px var(--accent), 0 0 24px rgb(var(--accent-rgb) / 0.3);
 }
 
 .navbar-brand-icon {
   font-size: 1.5rem;
   color: var(--accent);
-  text-shadow: 0 0 8px rgba(0, 212, 170, 0.4);
+  text-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.4);
   transition: transform 0.3s ease, text-shadow 0.3s ease;
   animation: icon-pulse 3s ease-in-out infinite;
 }
 
 @keyframes icon-pulse {
-  0%, 100% { text-shadow: 0 0 8px rgba(0, 212, 170, 0.4); }
-  50% { text-shadow: 0 0 14px rgba(0, 212, 170, 0.7), 0 0 28px rgba(0, 212, 170, 0.2); }
+  0%, 100% { text-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.4); }
+  50% { text-shadow: 0 0 14px rgb(var(--accent-rgb) / 0.7), 0 0 28px rgb(var(--accent-rgb) / 0.2); }
 }
 
 .navbar-brand-accent {
-  background: linear-gradient(135deg, var(--accent), #00b4d8);
+  background: var(--accent-gradient);
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -57,7 +57,7 @@
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--bg-secondary);
-  background: linear-gradient(135deg, var(--accent), #00b4d8);
+  background: var(--accent-gradient);
   padding: 1px 5px;
   border-radius: 3px;
   margin-left: 0.125rem;
@@ -132,4 +132,52 @@
 
 .nav-status-dot.offline {
   background: var(--text-muted);
+}
+
+/* ---------- Menu toggle ----------
+   Hidden on wide screens; responsive.css shows it below the navigation
+   breakpoint, where the links move into a drop-down. */
+
+.navbar-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.navbar-toggle:hover {
+  background: var(--bg-surface-hover);
+}
+
+.navbar-toggle-bar {
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  transition: transform var(--duration) var(--ease-out), opacity var(--duration-fast);
+}
+
+/* The three bars fold into a cross while the menu is open. */
+.menu-open .navbar-toggle {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.menu-open .navbar-toggle-bar:nth-child(1) {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.menu-open .navbar-toggle-bar:nth-child(2) {
+  opacity: 0;
+}
+
+.menu-open .navbar-toggle-bar:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
 }

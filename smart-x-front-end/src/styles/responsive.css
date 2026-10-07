@@ -1,0 +1,318 @@
+/* ============================================================
+   Responsive
+   Every breakpoint in the app lives here, so layout behaviour is
+   read and changed in one place rather than per component sheet.
+   Type, page padding and sidebar widths are already fluid (see
+   tokens.css), so these rules only handle structural changes.
+
+   Breakpoints:
+     1180px  dashboard drops to a single column
+     1100px  navigation collapses into a menu; command rows wrap
+      768px  tablet / small laptop
+      480px  phone
+     coarse  touch devices get larger hit areas
+
+   Selectors are scoped one level deeper than the component rules
+   they override (.telemetry-page .x, nav.navbar). index.css is
+   imported first, so equal-specificity rules here would otherwise
+   lose to the component sheets that load after it.
+   ============================================================ */
+
+/* ---------- 1180px: dashboard stacks ---------- */
+
+@media (max-width: 1180px) {
+  .telemetry-page .dashboard-grid,
+  .telemetry-page .mesh-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .telemetry-page .alert-feed {
+    position: static;
+  }
+
+  .commands-page .commands-grid,
+  .commands-page .insights-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Stacked, the console is no longer beside anything to stick to. */
+  .commands-page .override-console {
+    position: static;
+  }
+}
+
+/* ---------- 1100px: navigation menu, command rows wrap ---------- */
+
+@media (max-width: 1100px) {
+  /* The three long nav labels no longer fit beside the brand, so they
+     move into a drop-down opened by the menu button. */
+  nav.navbar {
+    padding: 0 var(--page-gutter);
+  }
+
+  .navbar .navbar-toggle {
+    display: inline-flex;
+  }
+
+  .navbar .navbar-nav {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: var(--z-menu);
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--page-gutter) var(--space-3);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 16px 32px rgb(0 0 0 / 0.4);
+    max-height: calc(100dvh - var(--nav-height));
+    overflow-y: auto;
+    /* Closed: hidden from sight and from the tab order. */
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(-6px);
+    transition:
+      opacity var(--duration) var(--ease-out),
+      transform var(--duration) var(--ease-out),
+      visibility 0s linear var(--duration);
+  }
+
+  .navbar.menu-open .navbar-nav {
+    visibility: visible;
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity var(--duration) var(--ease-out),
+      transform var(--duration) var(--ease-out);
+  }
+
+  .navbar .nav-link {
+    width: 100%;
+    padding: 0.75rem;
+    white-space: normal;
+  }
+
+  /* Below this the seven-column rhythm squeezes the command itself to nothing,
+     so each row wraps instead: identity first, then the status trailer. */
+  .commands-page .command-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.625rem;
+  }
+
+  .commands-page .command-row-main {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .commands-page .command-row-latency,
+  .commands-page .command-row-age {
+    text-align: left;
+  }
+
+  .commands-page .command-row-age {
+    margin-left: auto;
+  }
+}
+
+/* ---------- 768px: tablet ---------- */
+
+@media (max-width: 768px) {
+  /* The header actions take their own row beneath the title. */
+  .app-content .page-head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .telemetry-page .filter-bar {
+    gap: var(--space-3);
+  }
+
+  .telemetry-page .filter-group {
+    flex-wrap: wrap;
+  }
+
+  .telemetry-page .filter-actions,
+  .commands-page .filter-actions {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  /* The filter bar stacks so each group keeps its label beside its controls. */
+  .commands-page .command-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .commands-page .filter-group {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .commands-page .filter-search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* The page scrolls at this width, so inner scroll regions no longer
+     need their own: one scroll context is easier to use on touch. */
+  .commands-page .command-stream,
+  .commands-page .command-history-scroll,
+  .telemetry-page .sensor-grid,
+  .telemetry-page .alert-list,
+  .telemetry-page .detail-tab-body {
+    max-height: none;
+  }
+
+  /* Two sensor cards side by side fit a tablet; one per row on a phone. */
+  .telemetry-page .sensor-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  }
+
+  .telemetry-page .stat-row,
+  .commands-page .stat-row {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  }
+
+  /* The upload form's file picker and type select stack. */
+  .telemetry-page .upload-form-row {
+    flex-direction: column;
+  }
+
+  .telemetry-page .upload-field-type {
+    flex-basis: auto;
+  }
+
+  .app-content .coming-soon {
+    padding: 2rem 1rem;
+  }
+
+  .app-content .coming-soon-icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .app-content .coming-soon-feature,
+  .app-content .coming-soon p {
+    font-size: 0.875rem;
+  }
+
+  .app-content .coming-soon::after {
+    width: 200px;
+    height: 200px;
+  }
+
+  /* Give the dialog nearly the full viewport on a small screen. */
+  .app-content .modal-backdrop {
+    padding: 1rem 0.75rem;
+  }
+
+  .app-content .modal-dialog {
+    height: 92vh;
+    height: 92dvh;
+  }
+
+  .app-content .register-modal-dialog {
+    height: auto;
+    max-height: 92dvh;
+  }
+}
+
+/* ---------- 480px: phone ---------- */
+
+@media (max-width: 480px) {
+  /* The brand tag is decoration; drop it to keep the bar uncluttered. */
+  .navbar .navbar-brand-tag {
+    display: none;
+  }
+
+  /* The dialog becomes a full-screen sheet. */
+  .app-content .modal-backdrop {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .app-content .modal-dialog,
+  .app-content .register-modal-dialog {
+    height: 100dvh;
+    max-height: none;
+  }
+
+  .app-content .modal-dialog .detail-panel {
+    border-radius: 0;
+    border: none;
+  }
+
+  .telemetry-page .detail-facts {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .telemetry-page .payload-actions {
+    flex-direction: column-reverse;
+  }
+
+  .telemetry-page .payload-btn {
+    width: 100%;
+  }
+
+  .commands-page .filter-segment {
+    width: 100%;
+  }
+
+  .commands-page .filter-segment-btn {
+    flex: 1;
+  }
+
+  .commands-page .override-actions {
+    flex-direction: column;
+  }
+
+  .commands-page .throughput-window {
+    margin-left: 0;
+  }
+}
+
+/* ---------- Touch devices ----------
+   Fingers need bigger targets than a cursor. Small controls grow to
+   the shared touch size without changing the desktop layout. */
+
+@media (pointer: coarse) {
+  .app-content .filter-chip,
+  .app-content .filter-toggle,
+  .app-content .series-tab,
+  .app-content .live-toggle,
+  .app-content .register-btn,
+  .app-content .payload-btn,
+  .app-content .detail-tab,
+  .app-content .filter-segment-btn {
+    min-height: var(--touch-target);
+  }
+
+  .app-content .detail-close,
+  .app-content .attachment-download {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+
+  .app-content .tree-toggle {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .app-content .payload-input {
+    /* 16px stops iOS Safari zooming the page when an input is focused. */
+    font-size: 16px;
+    min-height: var(--touch-target);
+  }
+
+  /* No hover on touch: lifting cards on tap only causes jitter. */
+  .app-content .sensor-card:hover {
+    transform: none;
+  }
+}
