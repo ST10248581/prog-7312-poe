@@ -1,3 +1,34 @@
+// =============================================================================
+// CODE ATTRIBUTION — Queues and priority queues (Part 2)
+//
+// StreamPacket is the element type of the command engine's two intake lanes,
+// which were written with reference to the sources below.
+//
+// Code Attribution [14]
+// Author: Microsoft
+// Year: 2025
+// Title: Queue<T> Class (System.Collections.Generic)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: StreamPacket is the element of the Queue<StreamPacket>
+//   standard lane; PacketLane.Standard records that a packet was routed there
+//   for first-in, first-out processing.
+// Reference: Microsoft, 2025. Queue<T> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1> [Accessed 29 September 2026].
+//
+// Code Attribution [15]
+// Author: Microsoft
+// Year: 2025
+// Title: PriorityQueue<TElement,TPriority> Class
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: StreamPacket is the element of the critical PriorityQueue; its
+//   breach rank and ReceivedTicks form the (rank, arrival) priority tuple, and
+//   PacketLane.Critical records the routing.
+// Reference: Microsoft, 2025. PriorityQueue<TElement,TPriority> Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2> [Accessed 29 September 2026].
+// =============================================================================
+
 namespace SmartX.Api.Models.Stream;
 
 /// <summary>Which intake lane a packet was routed to.</summary>

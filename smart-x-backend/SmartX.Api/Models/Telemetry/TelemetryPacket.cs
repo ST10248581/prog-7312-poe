@@ -2,16 +2,58 @@
 // CODE ATTRIBUTION — Generics (Technical and Language Requirement 1)
 //
 // The generic wrapper class, its `where T : struct` constraint and the
-// allocation-free payload access in this file were written with reference to:
+// allocation-free payload access in this file were written with reference to
+// the sources below.
 //
-//   [1] Microsoft Learn, "Generic types and methods - C#".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics
-//   [2] Microsoft Learn, "Constraints on type parameters - C#".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters
-//   [3] Microsoft Learn, "Boxing and Unboxing - C#".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
-//   [4] Microsoft Learn, "Unsafe.As Method (System.Runtime.CompilerServices)".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.as
+// Code Attribution [1]
+// Author: Microsoft
+// Year: 2026
+// Title: Generic types and methods – C#
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Adapted the generic class declaration pattern into
+//   TelemetryPacket<T>, a sealed wrapper that carries one typed sensor reading
+//   with its sensor id, reading type, unit, timestamp and quality flags,
+//   exposed through the non-generic ITelemetryPacket interface so mixed
+//   payloads share one list.
+// Reference: Microsoft, 2026. Generic types and methods – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics> [Accessed 13 September 2026].
+//
+// Code Attribution [2]
+// Author: Microsoft
+// Year: 2025
+// Title: Constraints on type parameters – C#
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Applied the `where T : struct` constraint from the documented
+//   examples so a packet only accepts non-nullable value types (float, double,
+//   int, long, bool).
+// Reference: Microsoft, 2025. Constraints on type parameters – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters> [Accessed 13 September 2026].
+//
+// Code Attribution [3]
+// Author: Microsoft
+// Year: 2025
+// Title: Boxing and Unboxing – C#
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: No code copied. The documented cost of boxing was used to
+//   decide to hold the payload in a strongly typed `T` field rather than an
+//   `object` field.
+// Reference: Microsoft, 2025. Boxing and Unboxing – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing> [Accessed 13 September 2026].
+//
+// Code Attribution [4]
+// Author: Microsoft
+// Year: 2025
+// Title: Unsafe.As Method (System.Runtime.CompilerServices)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.as>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Adapted the Unsafe.As<TFrom,TTo>(ref TFrom) reinterpret-cast
+//   into TryGetNumeric and TryGetBoolean, guarding every cast with a `typeof(T)
+//   == typeof(X)` check so it is only taken when the types match.
+// Reference: Microsoft, 2025. Unsafe.As Method (System.Runtime.CompilerServices) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.as> [Accessed 13 September 2026].
 // =============================================================================
 
 using System.Runtime.CompilerServices;

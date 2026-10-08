@@ -1,3 +1,46 @@
+// =============================================================================
+// CODE ATTRIBUTION — Predictive action and recommendation engine (Part 2)
+//
+// The suggestion kinds and learning statistics in this file describe the output
+// of the command engine's action engine, which was written with reference to
+// the sources below.
+//
+// Code Attribution [20]
+// Author: Agrawal, R., Imieliński, T. and Swami, A.
+// Year: 1993
+// Title: Mining association rules between sets of items in large databases
+// Type: [Source code]
+// Available at: <https://doi.org/10.1145/170035.170072>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: SuggestionKind.PredictedAction and LearnedRule carry
+//   association-rule suggestions with their support and confidence, the two
+//   measures defined in the paper.
+// Reference: Agrawal, R., Imieliński, T. and Swami, A., 1993. Mining association rules between sets of items in large databases [Source code] Available at: <https://doi.org/10.1145/170035.170072> [Accessed 29 September 2026].
+//
+// Code Attribution [21]
+// Author: Jurafsky, D. and Martin, J.H.
+// Year: 2025
+// Title: Speech and Language Processing, Chapter 3: N-gram Language Models
+// Version: 3rd edition draft
+// Type: [Source code]
+// Available at: <https://web.stanford.edu/~jurafsky/slp3/>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: SuggestionKind.NextStep carries the bigram (first-order
+//   Markov) next-action suggestions and their estimated probability.
+// Reference: Jurafsky, D. and Martin, J.H., 2025. Speech and Language Processing, Chapter 3: N-gram Language Models (3rd edition draft) [Source code] Available at: <https://web.stanford.edu/~jurafsky/slp3/> [Accessed 29 September 2026].
+//
+// Code Attribution [22]
+// Author: Welford, B.P.
+// Year: 1962
+// Title: Note on a method for calculating corrected sums of squares and products
+// Type: [Source code]
+// Available at: <https://doi.org/10.1080/00401706.1962.10490022>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: SuggestionKind.ProblemDevice carries the drift-based device
+//   flags, scored with a z-score over Welford's running mean and variance.
+// Reference: Welford, B.P., 1962. Note on a method for calculating corrected sums of squares and products [Source code] Available at: <https://doi.org/10.1080/00401706.1962.10490022> [Accessed 29 September 2026].
+// =============================================================================
+
 namespace SmartX.Api.Models.Stream;
 
 public enum SuggestionKind

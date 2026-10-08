@@ -1,13 +1,45 @@
 // =============================================================================
 // CODE ATTRIBUTION — Attachment encryption at rest
-//   Microsoft Learn, "AesGcm Class (System.Security.Cryptography)".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm
-//   Microsoft Learn, "IncrementalHash Class".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash
-//   Hoang, Reyhanitabar, Rogaway & Vizár (2015), "Online Authenticated-Encryption
-//       and its Nonce-Reuse Misuse-Resistance" — the STREAM construction the
-//       chunk framing below follows (per-chunk nonce counter + final-chunk flag).
-//       https://eprint.iacr.org/2015/189
+//
+// The chunked authenticated encryption of sensor attachments in this file was
+// written with reference to the sources below.
+//
+// Code Attribution [23]
+// Author: Microsoft
+// Year: 2025
+// Title: AesGcm Class (System.Security.Cryptography)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm>
+// Accessed: [Accessed 8 October 2026]
+// Modifications: Used AesGcm with a 256-bit key and a 16-byte tag to seal each
+//   fixed-size chunk of an attachment separately, so large files are encrypted
+//   without being held in memory.
+// Reference: Microsoft, 2025. AesGcm Class (System.Security.Cryptography) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm> [Accessed 8 October 2026].
+//
+// Code Attribution [24]
+// Author: Microsoft
+// Year: 2025
+// Title: IncrementalHash Class (System.Security.Cryptography)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash>
+// Accessed: [Accessed 8 October 2026]
+// Modifications: Used IncrementalHash.CreateHash(SHA256) to hash the attachment
+//   chunk by chunk while it is encrypted and decrypted.
+// Reference: Microsoft, 2025. IncrementalHash Class (System.Security.Cryptography) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash> [Accessed 8 October 2026].
+//
+// Code Attribution [25]
+// Author: Hoang, V.T., Reyhanitabar, R., Rogaway, P. and Vizár, D.
+// Year: 2015
+// Title: Online Authenticated-Encryption and its Nonce-Reuse Misuse-Resistance
+// Type: [Source code]
+// Available at: <https://eprint.iacr.org/2015/189>
+// Accessed: [Accessed 8 October 2026]
+// Modifications: Adapted the STREAM construction: each chunk's nonce is a
+//   random per-file prefix plus the chunk counter, and the authenticated data
+//   binds the attachment id, chunk index and a final-chunk flag, so chunks
+//   cannot be swapped, reordered or truncated. Not taken from code; written
+//   from the paper's description.
+// Reference: Hoang, V.T., Reyhanitabar, R., Rogaway, P. and Vizár, D., 2015. Online Authenticated-Encryption and its Nonce-Reuse Misuse-Resistance [Source code] Available at: <https://eprint.iacr.org/2015/189> [Accessed 8 October 2026].
 // =============================================================================
 
 using System.Buffers;

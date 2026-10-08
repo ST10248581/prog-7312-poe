@@ -1,39 +1,125 @@
 // =============================================================================
-// CODE ATTRIBUTION — Part 2 Technical Requirements
+// CODE ATTRIBUTION — Part 2 Technical Requirements (Real-Time Command Stream and History)
 //
 // This class is where the Part 2 data structures and the automated action
 // engine do their work. The collection types and algorithms used for each were
-// written with reference to the sources below; the individual sections are
-// marked with the matching numbers, and the full list is repeated in README.md.
+// written with reference to the sources below. The individual sections below
+// are marked with the matching [n] numbers, and the full reference list is
+// repeated in README.md.
 //
-//   Stacks, queues and priority queues
-//  [14] Microsoft Learn, "Queue<T> Class (System.Collections.Generic)".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1
-//  [15] Microsoft Learn, "PriorityQueue<TElement,TPriority> Class".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2
-//  [16] Microsoft Learn, "Stack<T> Class (System.Collections.Generic)".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1
+// Code Attribution [14]
+// Author: Microsoft
+// Year: 2025
+// Title: Queue<T> Class (System.Collections.Generic)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Used Queue<T> for the standard intake lane (drained a fixed
+//   budget per tick, oldest packets shed past capacity), the bounded
+//   recent-alert and recent-reading windows, and the operator-activity and
+//   trigger windows of the action engine.
+// Reference: Microsoft, 2025. Queue<T> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1> [Accessed 29 September 2026].
 //
-//   Hash tables, dictionaries and sorted dictionaries
-//  [17] Microsoft Learn, "Dictionary<TKey,TValue> Class".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2
-//  [18] Microsoft Learn, "SortedDictionary<TKey,TValue> Class".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sorteddictionary-2
+// Code Attribution [15]
+// Author: Microsoft
+// Year: 2025
+// Title: PriorityQueue<TElement,TPriority> Class
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Used PriorityQueue<TElement,TPriority> for the critical intake
+//   lane with a (rank, arrival ticks) tuple priority, so the largest breach is
+//   dequeued first and ties stay in arrival order. A second PriorityQueue ranks
+//   the suggested actions by score.
+// Reference: Microsoft, 2025. PriorityQueue<TElement,TPriority> Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2> [Accessed 29 September 2026].
 //
-//   Sets
-//  [19] Microsoft Learn, "HashSet<T> Class (System.Collections.Generic)".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1
+// Code Attribution [16]
+// Author: Microsoft
+// Year: 2025
+// Title: Stack<T> Class (System.Collections.Generic)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Used two Stack<T> instances for undo and redo of manual
+//   overrides: undo pops the most recent override and cancels or reverts it,
+//   redo re-issues it, and a new override clears the redo stack.
+// Reference: Microsoft, 2025. Stack<T> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1> [Accessed 29 September 2026].
 //
-//   Predictive action and recommendation engine
-//  [20] Agrawal, R., Imieliński, T. and Swami, A. (1993) "Mining association
-//       rules between sets of items in large databases" — support and
-//       confidence of a rule.  https://doi.org/10.1145/170035.170072
-//  [21] Jurafsky, D. and Martin, J.H. "N-gram Language Models", Speech and
-//       Language Processing (3rd ed. draft), ch. 3 — bigram (first-order
-//       Markov) next-item probabilities.  https://web.stanford.edu/~jurafsky/slp3/
-//  [22] Welford, B.P. (1962) "Note on a method for calculating corrected sums
-//       of squares and products" — single-pass running mean and variance.
-//       https://doi.org/10.1080/00401706.1962.10490022
+// Code Attribution [17]
+// Author: Microsoft
+// Year: 2025
+// Title: Dictionary<TKey,TValue> Class
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Used Dictionary<TKey,TValue> for the live device registry
+//   keyed by node id, MAC address (case-insensitive comparers) and profile id,
+//   and for the threshold, node-setting and action-engine count tables.
+// Reference: Microsoft, 2025. Dictionary<TKey,TValue> Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2> [Accessed 29 September 2026].
+//
+// Code Attribution [18]
+// Author: Microsoft
+// Year: 2025
+// Title: SortedList<TKey,TValue> Class (System.Collections.Generic)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedlist-2>
+// Accessed: [Accessed 8 October 2026]
+// Modifications: Used SortedList<DateTime, SensorLogEntry> per node for the
+//   time-ordered sensor log, and added a hand-written LowerBound binary search
+//   over its Keys to find the start of a time window. Timestamp collisions are
+//   nudged forward a tick rather than overwritten.
+// Reference: Microsoft, 2025. SortedList<TKey,TValue> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedlist-2> [Accessed 8 October 2026].
+//
+// Code Attribution [19]
+// Author: Microsoft
+// Year: 2025
+// Title: HashSet<T> Class (System.Collections.Generic)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Used HashSet<T> for disconnected nodes and active error states
+//   so a repeat alert is recognised with one Add/Contains check, and UnionWith,
+//   ExceptWith and IntersectWith for the set differences reported to the
+//   client.
+// Reference: Microsoft, 2025. HashSet<T> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1> [Accessed 29 September 2026].
+//
+// Code Attribution [20]
+// Author: Agrawal, R., Imieliński, T. and Swami, A.
+// Year: 1993
+// Title: Mining association rules between sets of items in large databases
+// Type: [Source code]
+// Available at: <https://doi.org/10.1145/170035.170072>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Adapted the support and confidence measures to rules of the
+//   form condition => operator action, counted over a sliding window of
+//   operator activity. The paper's itemset-mining algorithm itself is not
+//   implemented.
+// Reference: Agrawal, R., Imieliński, T. and Swami, A., 1993. Mining association rules between sets of items in large databases [Source code] Available at: <https://doi.org/10.1145/170035.170072> [Accessed 29 September 2026].
+//
+// Code Attribution [21]
+// Author: Jurafsky, D. and Martin, J.H.
+// Year: 2025
+// Title: Speech and Language Processing, Chapter 3: N-gram Language Models
+// Version: 3rd edition draft
+// Type: [Source code]
+// Available at: <https://web.stanford.edu/~jurafsky/slp3/>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Applied the bigram estimate count(prev -> next) / count(prev
+//   -> *) to sequences of operator actions to suggest the likely next step. No
+//   smoothing applied.
+// Reference: Jurafsky, D. and Martin, J.H., 2025. Speech and Language Processing, Chapter 3: N-gram Language Models (3rd edition draft) [Source code] Available at: <https://web.stanford.edu/~jurafsky/slp3/> [Accessed 29 September 2026].
+//
+// Code Attribution [22]
+// Author: Welford, B.P.
+// Year: 1962
+// Title: Note on a method for calculating corrected sums of squares and products
+// Type: [Source code]
+// Available at: <https://doi.org/10.1080/00401706.1962.10490022>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: Implemented Welford's single-pass running mean and variance
+//   update as the RunningStats record struct, and added a z-score of the latest
+//   reading used to flag drifting devices.
+// Reference: Welford, B.P., 1962. Note on a method for calculating corrected sums of squares and products [Source code] Available at: <https://doi.org/10.1080/00401706.1962.10490022> [Accessed 29 September 2026].
 // =============================================================================
 
 using System.Diagnostics;
@@ -255,7 +341,7 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     /// <summary>Last parameters used per learned action, so a suggestion arrives filled in.</summary>
     private readonly Dictionary<string, string> _typicalParameters = new();
 
-    /* ---------- Sorted sensor logs [18] ---------- */
+    /* ---------- Sorted sensor logs — SortedList [18] ---------- */
 
     /// <summary>
     /// Each node's log, keyed and kept in timestamp order. A SortedList rather
@@ -703,6 +789,10 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     // =====================================================================
     // Manual overrides and the undo stack [16]
+    // Code attribution: overrides are pushed onto and popped from Stack<T> using
+    // the Push/Pop/TryPeek members documented in [16]. The second redo stack, the
+    // revert plan stored with each entry and the idempotent undo/redo are
+    // additions of this project.
     // =====================================================================
 
     public (DeviceCommand? command, string? error) Dispatch(DispatchCommandRequest request)
@@ -1296,6 +1386,11 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     // =====================================================================
     // Telemetry intake — Queue<T> [14] and PriorityQueue [15]
+    // Code attribution: routine packets use the Enqueue/TryDequeue FIFO members
+    // in [14]; critical packets use Enqueue(element, priority) and TryDequeue in
+    // [15], with a (rank, arrival ticks) tuple as the priority so ties keep their
+    // arrival order. Classifying before queueing, the per-tick budget and the
+    // backpressure shedding are additions of this project.
     // =====================================================================
 
     /// <summary>
@@ -1420,7 +1515,8 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     }
 
     /// <summary>
-    /// Set algebra over the disconnected nodes [19]. The caller sends the set it
+    /// Set algebra over the disconnected nodes [19] (UnionWith, ExceptWith and
+    /// IntersectWith). The caller sends the set it
     /// saw on its last poll; the differences are what is new to it. Every
     /// operation is O(n) over the smaller sets with O(1) membership tests, and
     /// nothing has to be kept per client on the server. Caller holds the lock.
@@ -1846,11 +1942,15 @@ public class SmartXCommandEngine : ISmartXCommandEngine
     }
 
     // =====================================================================
-    // Sorted sensor logs — SortedDictionary [18]
+    // Sorted sensor logs — SortedList [18]
+    // Code attribution: each node's log is a SortedList<TKey,TValue> as in [18],
+    // read through its indexed Keys collection. The LowerBound binary search over
+    // those keys, the tick nudge on duplicate timestamps and the retention trim
+    // from the front are additions of this project.
     // =====================================================================
 
     /// <summary>
-    /// A node's log over the window, read out of its SortedDictionary already in
+    /// A node's log over the window, read out of its SortedList already in
     /// timestamp order — including packets that arrived late, which were slotted
     /// into place on insert rather than appended out of sequence.
     /// </summary>
@@ -2661,6 +2761,13 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     // =====================================================================
     // Automated action engine [20], [21], [22]
+    // Code attribution: rule suggestions keep a condition => action rule only
+    // when it meets the support and confidence thresholds defined in [20];
+    // next-step suggestions use the bigram estimate count(prev -> next) /
+    // count(prev -> *) from [21]; problem devices are scored with Welford's
+    // running mean and variance [22]. Candidates are ranked with a
+    // PriorityQueue [15]. The thresholds, sliding windows and operator feedback
+    // weighting are additions of this project.
     // =====================================================================
 
     public void RecordActivity(OperatorActivityRequest request)
@@ -3542,6 +3649,10 @@ public class SmartXCommandEngine : ISmartXCommandEngine
 
     // =====================================================================
     // Registry and initialisation — Dictionary [17]
+    // Code attribution: the registry uses the Dictionary<TKey,TValue> constructor
+    // with an IEqualityComparer (StringComparer.OrdinalIgnoreCase) and TryGetValue
+    // lookups as documented in [17], so a node id or MAC address resolves in O(1)
+    // whatever its case.
     // =====================================================================
 
     /// <summary>

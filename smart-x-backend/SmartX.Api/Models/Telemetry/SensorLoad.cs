@@ -3,20 +3,57 @@
 //
 // The overloaded arithmetic, comparison and conversion operators below, and the
 // equality/ordering members kept consistent with them, were written with
-// reference to:
+// reference to the sources below.
 //
-//   [5] Microsoft Learn, "Operator overloading - Define unary, arithmetic,
-//       equality, and comparison operators - C# reference" (the `Fraction`
-//       struct example).
-//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading
-//   [6] Microsoft Learn, "Operator Overloads - Framework Design Guidelines"
-//       (overload in a symmetric fashion; conversion-operator guidance).
-//       https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads
-//   [7] Microsoft Learn, "IEquatable<T> Interface" (Notes to Implementers:
-//       override Equals/GetHashCode and overload ==/!= consistently).
-//       https://learn.microsoft.com/en-us/dotnet/api/system.iequatable-1
-//   [8] Microsoft Learn, "Structure types - C# reference" (`readonly struct`).
-//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+// Code Attribution [5]
+// Author: Microsoft
+// Year: 2026
+// Title: Operator overloading – Define unary, arithmetic, equality, and comparison operators – C# reference
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Adapted the `public static` operator declarations of the
+//   `Fraction` struct example to a SensorLoad value type: binary + (aggregate)
+//   and - (delta), unary -, scaling by a double, the paired comparison
+//   operators and an explicit conversion to double. Every binary operator also
+//   checks that both operands share a unit.
+// Reference: Microsoft, 2026. Operator overloading – Define unary, arithmetic, equality, and comparison operators – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading> [Accessed 13 September 2026].
+//
+// Code Attribution [6]
+// Author: Microsoft
+// Year: 2008
+// Title: Operator Overloads – Framework Design Guidelines
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: No code copied. Followed the guidelines to overload operators
+//   symmetrically and to make the lossy conversion to double explicit rather
+//   than implicit.
+// Reference: Microsoft, 2008. Operator Overloads – Framework Design Guidelines [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads> [Accessed 13 September 2026].
+//
+// Code Attribution [7]
+// Author: Microsoft
+// Year: 2025
+// Title: IEquatable<T> Interface
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.iequatable-1>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Applied the Notes to Implementers: Equals(SensorLoad),
+//   Equals(object), GetHashCode and ==/!= give consistent results (with a
+//   case-insensitive unit comparison), and IComparable<T> is implemented for
+//   ordering.
+// Reference: Microsoft, 2025. IEquatable<T> Interface [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.iequatable-1> [Accessed 13 September 2026].
+//
+// Code Attribution [8]
+// Author: Microsoft
+// Year: 2026
+// Title: Structure types – C# reference
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Declared SensorLoad as an immutable `readonly struct` as
+//   recommended for small value types. No example code copied.
+// Reference: Microsoft, 2026. Structure types – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct> [Accessed 13 September 2026].
 // =============================================================================
 
 namespace SmartX.Api.Models.Telemetry;

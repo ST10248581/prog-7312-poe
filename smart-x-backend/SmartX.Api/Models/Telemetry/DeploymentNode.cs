@@ -2,14 +2,22 @@
 // CODE ATTRIBUTION — Recursion (Technical and Language Requirement 4)
 //
 // The self-referencing node shape (a node holding a collection of nodes), which
-// is what makes the validation walk in SmartXTelemetryEngine recursive, follows:
+// is what makes the validation walk in SmartXTelemetryEngine recursive, follows
+// the source below.
 //
-//  [12] Microsoft Learn, "Iterate Through All Nodes of TreeView Control -
-//       Windows Forms" (Recursive approach: "a method that processes a tree
-//       node, and then calls the same method for each child node" — including
-//       its warning that a big tree may cause a stack overflow, which is why
-//       the engine carries a depth guard).
-//       https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control
+// Code Attribution [12]
+// Author: Microsoft
+// Year: 2021
+// Title: Iterate Through All Nodes of TreeView Control – Windows Forms
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Adapted the TreeNode shape (a node holding a collection of
+//   child nodes) into the DeploymentNode type with a tier, an optional sensor
+//   binding and a Children list. The recursive walk itself, with the depth
+//   guard the source warns is needed for large trees, lives in
+//   SmartXTelemetryEngine.
+// Reference: Microsoft, 2021. Iterate Through All Nodes of TreeView Control – Windows Forms [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control> [Accessed 13 September 2026].
 // =============================================================================
 
 namespace SmartX.Api.Models.Telemetry;

@@ -1,3 +1,23 @@
+// =============================================================================
+// CODE ATTRIBUTION — Stacks (Part 2)
+//
+// OverrideHistoryEntry is the element pushed onto the command engine's undo and
+// redo stacks, which were written with reference to the source below.
+//
+// Code Attribution [16]
+// Author: Microsoft
+// Year: 2025
+// Title: Stack<T> Class (System.Collections.Generic)
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1>
+// Accessed: [Accessed 29 September 2026]
+// Modifications: OverrideHistoryEntry is the element of the
+//   Stack<OverrideHistoryEntry> undo and redo histories. It carries the revert
+//   plan worked out when the override was issued, and the
+//   UndoOutcome/RedoOutcome enums report what a pop did.
+// Reference: Microsoft, 2025. Stack<T> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1> [Accessed 29 September 2026].
+// =============================================================================
+
 namespace SmartX.Api.Models.Stream;
 
 public enum UndoOutcome

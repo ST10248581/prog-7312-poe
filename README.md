@@ -734,105 +734,64 @@ dotnet test
 
 The advanced object-oriented C# concepts (Part 1) and the data structures and
 recommendation engine (Part 2) were implemented with reference to the sources
-listed below. Each source is also cited as a comment in the file(s) where the
-technique is used, using the same reference number as this list.
+listed below. Each source is also cited in a `// Code Attribution [n]` comment block
+(author, year, title, type, URL, access date, modifications and full reference) at
+the top of the file(s) where the technique is used, using the same reference number
+as this list. Section comments inside those files point back to the same numbers.
 
 ### Reference list
 
 **Generics — `TelemetryPacket<T>`**
 
-1. Microsoft. 2026. *Generic types and methods – C#*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics>
-   [Accessed 13 September 2026].
-2. Microsoft. 2025. *Constraints on type parameters – C#*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters>
-   [Accessed 13 September 2026].
-3. Microsoft. 2025. *Boxing and Unboxing – C#*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing>
-   [Accessed 13 September 2026].
-4. Microsoft. 2025. *Unsafe.As Method (System.Runtime.CompilerServices)*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.as>
-   [Accessed 13 September 2026].
+1. Microsoft, 2026. Generic types and methods – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics> [Accessed 13 September 2026].
+2. Microsoft, 2025. Constraints on type parameters – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters> [Accessed 13 September 2026].
+3. Microsoft, 2025. Boxing and Unboxing – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing> [Accessed 13 September 2026].
+4. Microsoft, 2025. Unsafe.As Method (System.Runtime.CompilerServices) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.as> [Accessed 13 September 2026].
 
 **Operator Overloading — `SensorLoad`**
 
-5. Microsoft. 2026. *Operator overloading – Define unary, arithmetic, equality, and comparison
-   operators – C# reference*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading>
-   [Accessed 13 September 2026].
-6. Microsoft. 2008. *Operator Overloads – Framework Design Guidelines*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads>
-   [Accessed 13 September 2026].
-7. Microsoft. 2025. *IEquatable\<T\> Interface*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/api/system.iequatable-1>
-   [Accessed 13 September 2026].
-8. Microsoft. 2026. *Structure types – C# reference*. [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct>
-   [Accessed 13 September 2026].
+5. Microsoft, 2026. Operator overloading – Define unary, arithmetic, equality, and comparison operators – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading> [Accessed 13 September 2026].
+6. Microsoft, 2008. Operator Overloads – Framework Design Guidelines [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads> [Accessed 13 September 2026].
+7. Microsoft, 2025. IEquatable\<T\> Interface [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.iequatable-1> [Accessed 13 September 2026].
+8. Microsoft, 2026. Structure types – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct> [Accessed 13 September 2026].
 
 **Advanced Arrays and Lists — the ingestion pipeline**
 
-9. Microsoft. 2026. *The array reference type – C# reference* (multidimensional and jagged
-   arrays). [Online]. Available at:
-   <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays>
-   [Accessed 13 September 2026].
-10. Microsoft. 2025. *Array.GetLength(Int32) Method*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.array.getlength>
-    [Accessed 13 September 2026].
-11. Microsoft. 2025. *List\<T\> Constructors* (the `List<T>(Int32)` capacity overload).
-    [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.-ctor>
-    [Accessed 13 September 2026].
+9. Microsoft, 2026. The array reference type – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays> [Accessed 13 September 2026].
+10. Microsoft, 2025. Array.GetLength(Int32) Method [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.array.getlength> [Accessed 13 September 2026].
+11. Microsoft, 2025. List\<T\> Constructors [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.-ctor> [Accessed 13 September 2026].
 
 **Recursion — deployment tree validation**
 
-12. Microsoft. 2021. *Iterate Through All Nodes of TreeView Control – Windows Forms*
-    (recursive approach). [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control>
-    [Accessed 13 September 2026].
-13. Microsoft. 2025. *ReferenceEqualityComparer Class*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer>
-    [Accessed 13 September 2026].
+12. Microsoft, 2021. Iterate Through All Nodes of TreeView Control – Windows Forms [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control> [Accessed 13 September 2026].
+13. Microsoft, 2025. ReferenceEqualityComparer Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer> [Accessed 13 September 2026].
 
 **Part 2 — Stacks, queues and priority queues**
 
-14. Microsoft. 2025. *Queue\<T\> Class (System.Collections.Generic)*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1>
-    [Accessed 29 September 2026].
-15. Microsoft. 2025. *PriorityQueue\<TElement,TPriority\> Class*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2>
-    [Accessed 29 September 2026].
-16. Microsoft. 2025. *Stack\<T\> Class (System.Collections.Generic)*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1>
-    [Accessed 29 September 2026].
+14. Microsoft, 2025. Queue\<T\> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.queue-1> [Accessed 29 September 2026].
+15. Microsoft, 2025. PriorityQueue\<TElement,TPriority\> Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.priorityqueue-2> [Accessed 29 September 2026].
+16. Microsoft, 2025. Stack\<T\> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.stack-1> [Accessed 29 September 2026].
 
-**Part 2 — Hash tables, dictionaries and sorted dictionaries**
+**Part 2 — Hash tables, dictionaries and sorted lists**
 
-17. Microsoft. 2025. *Dictionary\<TKey,TValue\> Class*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2>
-    [Accessed 29 September 2026].
-18. Microsoft. 2025. *SortedDictionary\<TKey,TValue\> Class*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sorteddictionary-2>
-    [Accessed 29 September 2026].
+17. Microsoft, 2025. Dictionary\<TKey,TValue\> Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2> [Accessed 29 September 2026].
+18. Microsoft, 2025. SortedList\<TKey,TValue\> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedlist-2> [Accessed 8 October 2026].
 
 **Part 2 — Sets**
 
-19. Microsoft. 2025. *HashSet\<T\> Class (System.Collections.Generic)*. [Online]. Available at:
-    <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1>
-    [Accessed 29 September 2026].
+19. Microsoft, 2025. HashSet\<T\> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1> [Accessed 29 September 2026].
 
 **Part 2 — Predictive action and recommendation engine**
 
-20. Agrawal, R., Imieliński, T. and Swami, A. 1993. Mining association rules between
-    sets of items in large databases. *Proceedings of the 1993 ACM SIGMOD International
-    Conference on Management of Data*, pp. 207–216. Available at:
-    <https://doi.org/10.1145/170035.170072> [Accessed 29 September 2026].
-21. Jurafsky, D. and Martin, J.H. 2025. *Speech and Language Processing* (3rd ed. draft),
-    ch. 3 "N-gram Language Models". [Online]. Available at:
-    <https://web.stanford.edu/~jurafsky/slp3/> [Accessed 29 September 2026].
-22. Welford, B.P. 1962. Note on a method for calculating corrected sums of squares and
-    products. *Technometrics*, 4(3), pp. 419–420. Available at:
-    <https://doi.org/10.1080/00401706.1962.10490022> [Accessed 29 September 2026].
+20. Agrawal, R., Imieliński, T. and Swami, A., 1993. Mining association rules between sets of items in large databases [Source code] Available at: <https://doi.org/10.1145/170035.170072> [Accessed 29 September 2026].
+21. Jurafsky, D. and Martin, J.H., 2025. Speech and Language Processing, Chapter 3: N-gram Language Models (3rd edition draft) [Source code] Available at: <https://web.stanford.edu/~jurafsky/slp3/> [Accessed 29 September 2026].
+22. Welford, B.P., 1962. Note on a method for calculating corrected sums of squares and products [Source code] Available at: <https://doi.org/10.1080/00401706.1962.10490022> [Accessed 29 September 2026].
+
+**Sensor attachments — encryption at rest**
+
+23. Microsoft, 2025. AesGcm Class (System.Security.Cryptography) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm> [Accessed 8 October 2026].
+24. Microsoft, 2025. IncrementalHash Class (System.Security.Cryptography) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash> [Accessed 8 October 2026].
+25. Hoang, V.T., Reyhanitabar, R., Rogaway, P. and Vizár, D., 2015. Online Authenticated-Encryption and its Nonce-Reuse Misuse-Resistance [Source code] Available at: <https://eprint.iacr.org/2015/189> [Accessed 8 October 2026].
 
 ### Where each reference is cited in the code
 
@@ -845,7 +804,12 @@ All paths are relative to `smart-x-backend/SmartX.Api/`.
 | `Models/Requests/IngestTelemetryRequest.cs` | 9 | The `double[][]` jagged array carrying ragged gateway batches |
 | `Models/Telemetry/DeploymentNode.cs` | 12 | The self-referencing node shape (a node holding a list of nodes) that makes the validation walk recursive |
 | `Logic/SmartXTelemetryEngine.cs` | 1, 3, 5, 6, 9, 10, 11, 12, 13 | Header block lists all; section comments cite 9/10/11 (+1, 3) on `IngestHistoricalBatches` and `ProjectStatistics`, 5/6 on `GetAggregateLoad` / `CompareLoad`, and 12/13 on `ValidateDeployment` / `ValidateNode` |
-| `Logic/SmartXCommandEngine.cs` | 14–22 | Header block lists all; field and section comments cite 14/15 on the two intake lanes, 16 on the undo stack, 17 on the registry dictionaries, 18 on the sorted sensor logs, 19 on the disconnected-node and error-state sets, 20 on `AddRuleSuggestions`, 21 on `AddNextStepSuggestions`, and 22 on `RunningStats` / `AddProblemDeviceSuggestions` |
+| `Logic/SmartXCommandEngine.cs` | 14–22 | Header block lists all; field comments and `Code attribution:` section comments cite 14/15 on the two intake lanes, 16 on the undo stack, 17 on the registry dictionaries, 18 on the sorted sensor logs, 19 on the disconnected-node and error-state sets, 20 on `AddRuleSuggestions`, 21 on `AddNextStepSuggestions`, and 22 on `RunningStats` / `AddProblemDeviceSuggestions` |
+| `Models/Stream/StreamPacket.cs` | 14, 15 | The element type of the FIFO standard lane and the critical priority queue, and the `PacketLane` routing flag |
+| `Models/Stream/OverrideHistoryEntry.cs` | 16 | The element pushed onto the undo and redo stacks, with its revert plan and undo/redo outcomes |
+| `Models/Stream/SensorLogEntry.cs` | 18 | The value stored in each node's timestamp-keyed `SortedList` |
+| `Models/Stream/SuggestedAction.cs` | 20, 21, 22 | The suggestion kinds produced by the association-rule, next-step and problem-device engines |
+| `Logic/Attachments/AttachmentCipher.cs` | 23, 24, 25 | AES-GCM chunk sealing, the incremental SHA-256 hash, and the STREAM-style nonce and authenticated-data framing |
 
 ## Research Focus
 

@@ -3,36 +3,113 @@
 //
 // This class is where the four required advanced C# concepts do their work. The
 // language constructs used for each were written with reference to the sources
-// below; the individual sections are marked with the matching numbers, and the
-// full list is repeated in README.md.
+// below. The individual sections below are marked with the matching [n]
+// numbers, and the full reference list is repeated in README.md.
 //
-//   Generics
-//   [1] Microsoft Learn, "Generic types and methods - C#".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics
-//   [3] Microsoft Learn, "Boxing and Unboxing - C#".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+// Code Attribution [1]
+// Author: Microsoft
+// Year: 2026
+// Title: Generic types and methods – C#
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: TelemetryPacket<T> instances are built per sample in the
+//   batch-ingestion pipeline. No example code copied.
+// Reference: Microsoft, 2026. Generic types and methods – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics> [Accessed 13 September 2026].
 //
-//   Operator overloading
-//   [5] Microsoft Learn, "Operator overloading - ... - C# reference".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading
-//   [6] Microsoft Learn, "Operator Overloads - Framework Design Guidelines".
-//       https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads
+// Code Attribution [3]
+// Author: Microsoft
+// Year: 2025
+// Title: Boxing and Unboxing – C#
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: No code copied. The boxing guidance was used to keep samples
+//   as typed packets rather than `object` values during ingestion.
+// Reference: Microsoft, 2025. Boxing and Unboxing – C# [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing> [Accessed 13 September 2026].
 //
-//   Advanced arrays and lists
-//   [9] Microsoft Learn, "The array reference type - C# reference".
-//       https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays
-//  [10] Microsoft Learn, "Array.GetLength(Int32) Method".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.array.getlength
-//  [11] Microsoft Learn, "List<T> Constructors" (the List<T>(Int32) capacity
-//       overload).
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.-ctor
+// Code Attribution [5]
+// Author: Microsoft
+// Year: 2026
+// Title: Operator overloading – Define unary, arithmetic, equality, and comparison operators – C# reference
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: The operators declared on SensorLoad are consumed by
+//   GetAggregateLoad and CompareLoad (+, - and the comparison operators) in
+//   place of named helper methods.
+// Reference: Microsoft, 2026. Operator overloading – Define unary, arithmetic, equality, and comparison operators – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/operator-overloading> [Accessed 13 September 2026].
 //
-//   Recursion
-//  [12] Microsoft Learn, "Iterate Through All Nodes of TreeView Control -
-//       Windows Forms".
-//       https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control
-//  [13] Microsoft Learn, "ReferenceEqualityComparer Class".
-//       https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer
+// Code Attribution [6]
+// Author: Microsoft
+// Year: 2008
+// Title: Operator Overloads – Framework Design Guidelines
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: No code copied. The guidance was used to express zone
+//   aggregation as operators on a numeric-style value type.
+// Reference: Microsoft, 2008. Operator Overloads – Framework Design Guidelines [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/operator-overloads> [Accessed 13 September 2026].
+//
+// Code Attribution [9]
+// Author: Microsoft
+// Year: 2026
+// Title: The array reference type – C# reference
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Adapted the jagged double[][] and rectangular double[,] array
+//   syntax into IngestHistoricalBatches and ProjectStatistics, which reduce
+//   ragged gateway batches into a per-batch statistics matrix indexed by [row,
+//   column].
+// Reference: Microsoft, 2026. The array reference type – C# reference [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/arrays> [Accessed 13 September 2026].
+//
+// Code Attribution [10]
+// Author: Microsoft
+// Year: 2025
+// Title: Array.GetLength(Int32) Method
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.array.getlength>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Used GetLength(0) and GetLength(1) to read the row and column
+//   counts of the rectangular statistics matrix.
+// Reference: Microsoft, 2025. Array.GetLength(Int32) Method [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.array.getlength> [Accessed 13 September 2026].
+//
+// Code Attribution [11]
+// Author: Microsoft
+// Year: 2025
+// Title: List<T> Constructors
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.-ctor>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Used the List<T>(Int32) capacity constructor to pre-size the
+//   reading list from the counted sample total, avoiding repeated
+//   re-allocation.
+// Reference: Microsoft, 2025. List<T> Constructors [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.-ctor> [Accessed 13 September 2026].
+//
+// Code Attribution [12]
+// Author: Microsoft
+// Year: 2021
+// Title: Iterate Through All Nodes of TreeView Control – Windows Forms
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Adapted the PrintRecursive example (process the node, then
+//   call the same method for each child) into ValidateNode, which also checks
+//   each child's tier, records the node path, and adds a depth guard and an
+//   ancestor set so deep or cyclic trees stop safely.
+// Reference: Microsoft, 2021. Iterate Through All Nodes of TreeView Control – Windows Forms [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/how-to-iterate-through-all-nodes-of-a-windows-forms-treeview-control> [Accessed 13 September 2026].
+//
+// Code Attribution [13]
+// Author: Microsoft
+// Year: 2025
+// Title: ReferenceEqualityComparer Class
+// Type: [Source code]
+// Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer>
+// Accessed: [Accessed 13 September 2026]
+// Modifications: Used ReferenceEqualityComparer.Instance for the ancestor
+//   HashSet so cycle detection compares nodes by identity rather than by value.
+// Reference: Microsoft, 2025. ReferenceEqualityComparer Class [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.referenceequalitycomparer> [Accessed 13 September 2026].
 // =============================================================================
 
 using System.Diagnostics;
