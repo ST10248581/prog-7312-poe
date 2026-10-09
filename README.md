@@ -174,6 +174,201 @@ never leaves the UI hanging.
 | `/commands` | `CommandsPage` | Implemented — command stream, manual overrides with undo, telemetry intake, Suggested Actions & Automated Insights |
 | `*` | `NotFoundPage` | 404 with links back to each module |
 
+## Manual Testing
+
+Follow these steps in the browser to see each feature working. Start the backend
+and the frontend first (see [Getting Started](#getting-started)). All data is held
+in memory, so restarting the API puts everything back to its seeded state.
+
+Seeded node ids follow the category order: `ENV-001`, `PWR-002`, `ACT-003`,
+`MOT-004`, `NET-005`, `ENV-006`, … (40 nodes).
+
+### Page 1: Sensor Data Ingestion and Telemetry (`/telemetry`)
+
+Open **http://localhost:5173/telemetry**.
+
+**1. Overview and real-time refresh**
+
+1. Check the six tiles along the top: **Mesh health**, **Device status**, **Active
+   alerts**, **Readings / hour**, **Anomalies / hour** and **Ingest success**. Each
+   should show a number, not "—".
+2. Note the **Updated hh:mm:ss** time beside the **Live** button. Wait about
+   10 seconds and check that the time moves on and the tiles refresh.
+3. Click **Live** so it reads **Paused**. The time stops updating. Click it again to
+   resume.
+
+**2. Filtering**
+
+1. In the filter bar, click the **Offline** status chip. The **Mesh nodes** grid and
+   the "**N of 40 sensors**" count shrink to the offline nodes only.
+2. Add a **Category** chip and a **Zone** chip. The grid narrows further.
+3. Click **Anomalies only**. Only sensors with out-of-threshold readings remain.
+4. Click **Clear**. All 40 sensors return.
+
+**3. Alerts and investigating a device**
+
+1. In **Priority alerts**, click an alert. The detail view opens for that sensor.
+2. Check the header facts (**Status**, **Last seen**, **Firmware**, **Serial**,
+   **Registered**) and the live chart. Switch between the reading-type tabs above
+   the chart. A tab with a number badge has that many anomalies.
+3. Click through the **Readings**, **Thresholds**, **Ingestion** and **Alerts** tabs
+   to check each one shows data.
+4. Scroll to **Guided troubleshooting** and check that it lists next steps for this
+   device.
+5. Close the detail view. Then click any sensor card in **Mesh nodes** and check
+   that the same view opens for that sensor.
+
+**4. Registering a device (validation)**
+
+1. Click **+ Register Device**. **Register Device** stays disabled while the form is
+   incomplete.
+2. Type `12:34` into **MAC Address**. An inline error appears straight away:
+   "Six hex pairs separated by : or -, e.g. 5C:A1:2A:2C:3C:6F."
+3. Fill in every field with valid values: a new **Device Name**, a MAC such as
+   `AA:BB:CC:DD:EE:01`, a new **Node ID** such as `ENV-041`, **Zone**, **Room** and
+   **Sensor Category**. Click **Register Device**. The modal closes and the sensor
+   count goes up by one.
+4. Open **+ Register Device** again and reuse that MAC or node id. The API rejects the
+   duplicate, and the message appears under the field it belongs to.
+
+**5. Updating a registration**
+
+1. Open a sensor and go to the **Registration** tab.
+2. Change the room, then click **Save Registration**. The tab shows
+   "Registration updated successfully."
+3. Clear a required field. **Save Registration** is disabled, and the field shows an
+   inline error.
+
+**6. Secure attachments**
+
+1. Open a sensor and go to the **Attachments** tab.
+2. Set **Type** to **Hardware Log**, then drop a `.txt` or `.log` file onto the drop
+   zone (or click it to browse). Click **Upload File**. A progress bar runs and the
+   file appears in the list.
+3. Click **↓** beside the file. It downloads, after the API decrypts it and checks
+   its SHA-256 hash.
+4. Set **Type** to **Deployment Photo** and pick a `.txt` file. It is rejected,
+   because photos only accept `.jpg`, `.jpeg`, `.png` or `.webp`. Renaming a text
+   file to `.png` is rejected too, because the file contents are checked as well as
+   the name.
+
+**7. Mesh topology and deployment**
+
+Scroll down to **Mesh topology and deployment**.
+
+1. **Recursion.** Check the **Deployment nodes**, **Sensors placed**, **Config
+   issues** and **Profile validation** tiles. Expand and collapse the branches of
+   **Deployment hierarchy** (Facility → Zone → Sub-Zone → Node). Any nodes with
+   **Validation findings** are marked with **!**. Click a node to open its details.
+2. **Operator overloading.** Check **Metered load**: **Aggregate draw**, **Average
+   per meter** and **Heaviest two, compared**. Select a single **Zone** chip in the
+   filter bar. The scope and totals change to that zone.
+3. **Generics and arrays.** Under **Gateway ingest**, click **Simulate flush**. It
+   sends three batches of different lengths, with one lost sample and one
+   over-threshold reading. Check the **Batches accepted** and **Payload type** tiles
+   and the per-batch table (**Batch**, **Rej**, **Anom**, **Min**, **Max**,
+   **Mean**). Expect one rejected sample and at least one anomaly.
+
+### Page 2: Real-Time Command Stream and History (`/commands`)
+
+Open **http://localhost:5173/commands**. The device simulator starts posting packets
+straight away, so the panels fill within a few seconds.
+
+**1. Suggested Actions & Automated Insights**
+
+1. Check that **Suggested Actions & Automated Insights** at the top shows cards
+   labelled **Predicted**, **Next step** or **Problem device**. Each card gives a
+   reason, a confidence and evidence chips. The list can be empty for the first few
+   seconds after the API starts.
+2. Click a card's **Apply: …** button. It sends the command, runs the search or
+   inspects the node. If it sent a command, a toast confirms it and offers **Undo**.
+3. Dismiss another card. It disappears, and the engine ranks it lower from then on.
+4. In **What the engine has learned**, check the rule counts and your recent
+   activity. Click **Reset learning** to empty it, then search or inspect a few
+   nodes and watch it build up again.
+
+**2. Filtering, search, command stream and history**
+
+1. Type a node id such as `PWR-002` into the search box. **Command stream**,
+   **Command history** and **Live device readings** all narrow to that device.
+2. Switch a **Zone** or **Node alert** chip on and off. The **Filtering by** row
+   lists the active filters.
+3. Click a row in **Command stream**. **Manual override** targets that row's node.
+4. Click **Live** so it reads **Paused**. The stream stops updating until you
+   resume it.
+
+**3. Message queue and priority queue: the Telemetry intake panel**
+
+1. Find the **Telemetry intake** panel. Note the **Standard queue · FIFO** depth
+   (out of 1 000) and the **Critical lane · priority** processed count.
+2. Click **Simulate power spike**. It posts 20 routine Power packets and then one
+   12 kW spike.
+3. The result line under the buttons should read
+   `20 routine packets queued; 1 critical processed immediately, overtaking N queued packets (waited ~0–5 ms).`
+   The spike was posted *last* but processed *first*, ahead of the FIFO queue.
+4. Watch the standard queue depth fall over the next few seconds. It drains at 20
+   packets per 2-second tick, in arrival order.
+5. Click **Flood standard lane**. It posts 1 200 routine packets, more than the
+   queue holds. The result line reports `… oldest shed by backpressure`, and the
+   **shed by backpressure** counter goes up. The spike in the same batch is still
+   processed immediately.
+
+**4. Sets: open error states and disconnected nodes**
+
+1. In the same panel, check **Open error states** and **Disconnected nodes**. A chip
+   with "×N suppressed" means repeat alerts for that node were recognised and
+   dropped, rather than raised again.
+2. Check the **duplicates suppressed** counter. It rises over time as the simulator
+   repeats breaches and lost links.
+3. Leave the page open for a while. When a node drops off or comes back, a
+   **Since your last refresh** line appears with "↓ lost …" or "↑ back …".
+4. Click a chip. The node timeline opens for that node.
+
+**5. Undo and redo stacks: the Manual override console**
+
+1. In **Manual override**, choose an online target node (for example `PWR-002`),
+   the command **Set Threshold** and parameters such as `power.max=5`.
+2. **Untick "Dry run".** Dry runs are logged but never stacked, so they cannot be
+   undone. A live override to a disconnected node is rejected.
+3. Tick **I have checked the target node and parameters**, then click
+   **Queue override**. The **Undo history** count goes up by one, and the panel says
+   what undo will do (for example "Undo will restore power.max to 5.7kW").
+4. Click **↶ Undo**. If the command was still queued it is cancelled. If it had
+   already been sent, the inverse is sent at Immediate priority. **↷ Redo (1)** is
+   now enabled.
+5. Click **↷ Redo**. The same command is re-sent and goes back onto the undo stack.
+6. Queue a new override, then check that **Redo** is disabled again. A new override
+   clears the redo stack.
+
+**6. Dictionaries: Instant lookup on the Live device readings panel**
+
+1. In **Live device readings**, type `ENV-001` into **Instant lookup** and click
+   **Find**. The result reads `Found ENV-001 via the node ID dictionary in 0.00xx ms`
+   with `one hash probe, 40 entries`.
+2. Hover over the ENV-001 device card to see its MAC address. Type the MAC in lower
+   case with dashes (for example `5c-a1-40-78-7f-18`) and click **Find**. It is found
+   **via the MAC address dictionary**, and the key is shown in canonical form
+   (`5C:A1:40:78:7F:18`).
+3. Look up `NOPE-999`. The page reports `No device is registered under NOPE-999` in a
+   similar time, because a miss is also a single hash probe.
+4. Check that each device card shows its latest readings and a sparkline that moves
+   every few seconds. These come from a dictionary of bounded queues holding the
+   last 24 values per node and metric.
+
+**7. Sorted list: the Node timeline**
+
+1. Click any device card to inspect it. The **Node timeline** panel opens.
+2. Read the line under the heading:
+   `Range read: skipped X older entries, read Y of Z in N ms · SortedList, O(log n + k)`.
+3. Switch between **5 min**, **15 min**, **1 h** and **3 h**. As the window grows,
+   "read Y" goes up and "skipped X" goes down, while the log size Z stays the same.
+   Events are always drawn in timestamp order.
+
+**8. Throughput**
+
+Check the throughput strip. It shows the dispatch rate per minute for the selected
+**Window**, and changes when you pick a different window in the filter bar.
+
 ## API Reference
 
 All routes are prefixed with `/api`. Enums are serialised as names (for example
@@ -729,202 +924,6 @@ dotnet test
   restores the previous setting. Undo and redo are idempotent. A new override clears
   redo.
 * **RingBuffer.** Overwrite order, tail reads, and the modification check.
-
-### How to test the queues and dictionaries on Page 2
-
-There are three ways to check the Part 2 structures: run the automated tests, use
-the `/commands` page, or call the API directly. Each one tests the same engine
-(`SmartXCommandEngine`).
-
-#### 1. Automated tests
-
-Stop the API first if it is running. A running `SmartX.Api` locks its build output,
-and the test build then fails to copy it.
-
-```bash
-cd smart-x-backend/SmartX.Api.Tests
-
-dotnet test                                              # all 14 tests
-dotnet test --filter "FullyQualifiedName~IntakeQueueTests"   # queues, priority queue, dictionaries, sets (6)
-dotnet test --filter "FullyQualifiedName~UndoRedoTests"      # undo / redo stacks (5)
-dotnet test --filter "FullyQualifiedName~RingBufferTests"    # RingBuffer<T> (3)
-```
-
-Expected result: `Passed!  - Failed: 0`.
-
-| Test | Structure it proves |
-| --- | --- |
-| `Critical_packet_is_processed_before_standard_packets_that_arrived_first` | `PriorityQueue` critical lane overtakes the FIFO `Queue` |
-| `Critical_lane_serves_the_largest_breach_first_even_if_it_arrived_last` | Priority ordering inside the critical lane |
-| `Standard_queue_sheds_oldest_packets_past_its_capacity` | Bounded `Queue` with backpressure |
-| `Repeat_disconnect_is_suppressed_and_counted_against_the_node` | `HashSet` duplicate suppression |
-| `Set_difference_reports_nodes_newly_disconnected_since_the_last_poll` | `ExceptWith` / `IntersectWith` |
-| `Device_lookup_finds_a_mac_address_in_any_notation` | MAC-keyed `Dictionary` with canonical keys |
-| `Undo_*` / `Redo_*` / `A_new_override_clears_the_redo_stack` | Undo and redo `Stack`s, idempotency |
-
-#### 2. Manual walkthrough in the browser
-
-Start the backend and the frontend (see [Getting Started](#getting-started)), then
-open **http://localhost:5173/commands**. The device simulator starts posting packets
-straight away, so the panels fill within a few seconds.
-
-Seeded node ids follow the category order: `ENV-001`, `PWR-002`, `ACT-003`,
-`MOT-004`, `NET-005`, `ENV-006`, … (40 nodes).
-
-**Message queue and priority queue: the Telemetry intake panel**
-
-1. Find the **Telemetry intake** panel. Note the **Standard queue · FIFO** depth
-   (out of 1 000) and the **Critical lane · priority** processed count.
-2. Click **Simulate power spike**. It posts 20 routine Power packets and then one
-   12 kW spike for a PWR/ACT/NET node.
-3. Check the result line under the buttons. It should read
-   `20 routine packets queued; 1 critical processed immediately, overtaking N queued packets (waited ~0–5 ms).`
-   The spike was posted *last* but was processed *first*: that is the priority
-   queue bypassing the FIFO queue.
-4. Watch the standard queue depth fall over the next few seconds. It drains at
-   20 packets per 2-second tick, in arrival order.
-5. Click **Flood standard lane**. It posts 1 200 routine packets, more than the
-   queue holds. The result line reports `… oldest shed by backpressure`, and the
-   **shed by backpressure** counter goes up. The spike in the same batch is still
-   processed immediately, because the critical lane is never shed.
-
-**Undo and redo stacks: the Manual override console**
-
-1. In **Manual override**, choose a target node that is online (for example
-   `PWR-002`), the command **Set Threshold** and parameters such as `power.max=5`.
-2. **Untick "Dry run".** Dry runs are logged but never stacked, so they cannot be
-   undone.
-3. Tick **I have checked the target node and parameters**, then click
-   **Queue override**. The **Undo history** count goes up by one, and the panel
-   says what undo will do (for example "Undo will restore power.max to 5.7kW").
-4. Click **↶ Undo**. If the command was still queued it is cancelled; if it had
-   already been sent, the inverse is sent at Immediate priority. The **↷ Redo (1)**
-   button is now enabled.
-5. Click **↷ Redo**. The same command is re-sent and goes back onto the undo stack.
-6. Queue a new override, then confirm that **Redo** is disabled again. A new
-   override clears the redo stack.
-
-**Dictionaries: Instant lookup on the Live device readings panel**
-
-1. In **Live device readings**, type `ENV-001` into **Instant lookup** and click
-   **Find**. The result reads `Found ENV-001 via the node ID dictionary in 0.00xx ms`
-   with `one hash probe, 40 entries`.
-2. Hover over the ENV-001 device card to see its MAC address (for example
-   `5C:A1:40:78:7F:18`). Type it in lower case with dashes (`5c-a1-40-78-7f-18`) and
-   click **Find**. It is found **via the MAC address dictionary**, and the key shown
-   is the canonical `5C:A1:40:78:7F:18`. Both notations reach the same entry.
-3. Look up a key that does not exist, such as `NOPE-999`. The page reports
-   `No device is registered under NOPE-999` in a similar time. A miss costs one hash
-   probe too.
-
-**Sorted list (sorted dictionary): the Node timeline**
-
-1. Click any device card (or an error-state chip in the intake panel) to inspect
-   that node. The **Node timeline** panel opens for it.
-2. Read the line under the heading:
-   `Range read: skipped X older entries, read Y of Z in N ms · SortedList, O(log n + k)`.
-   The binary search skipped X entries without reading them.
-3. Switch between **5 min**, **15 min**, **1 h** and **3 h**. "read Y" grows with the
-   window and "skipped X" shrinks, while the log size Z stays the same. The events
-   are always drawn in timestamp order.
-
-**Dictionary of bounded queues: latest readings**
-
-Each device card in **Live device readings** shows its latest values and a
-sparkline. These come from `_recentReadings`, one hash probe per node and metric
-into a queue capped at the last 24 values. The sparklines advance every few
-seconds as the simulator posts packets.
-
-#### 3. Calling the API directly
-
-These commands use `curl` in Git Bash, macOS or Linux. In Windows PowerShell, `curl`
-is an alias for `Invoke-WebRequest`, so run them from Git Bash instead. The API must
-be running on port 5127.
-
-**Priority queue overtaking the FIFO queue.** Two routine packets and one spike, with
-the spike sent last:
-
-```bash
-curl -s -X POST http://localhost:5127/api/commands/packets \
-  -H "Content-Type: application/json" \
-  -d '[{"nodeId":"PWR-002","readingType":"Power","value":1.8},
-       {"nodeId":"PWR-002","readingType":"Power","value":2.1},
-       {"nodeId":"PWR-002","readingType":"Power","value":12}]'
-```
-
-Expect `"queuedStandard":2`, `"processedCritical":1`, a `bypassedStandard` count, and a
-`criticalAlerts` entry with `"lane":"Critical"` and a `queueWaitMs` of a few
-milliseconds.
-
-**Queue depths and counters:**
-
-```bash
-curl -s http://localhost:5127/api/commands/pipeline
-```
-
-Check `standardQueueDepth`, `standardQueueCapacity` (1000), `standardBudgetPerTick`
-(20), `bypassedStandard`, `dropped` and `duplicatesSuppressed`.
-
-**Dictionary lookups by node id, by MAC in any notation, and a miss:**
-
-```bash
-curl -s "http://localhost:5127/api/commands/devices/lookup?key=ENV-001"
-curl -s "http://localhost:5127/api/commands/devices/lookup?key=5c-a1-40-78-7f-18"   # use the macAddress from the first call
-curl -s "http://localhost:5127/api/commands/devices/lookup?key=NOPE-999"
-```
-
-Expect `"matchedBy":"NodeId"`, then `"matchedBy":"MacAddress"` with
-`"normalisedKey":"5C:A1:40:78:7F:18"`, then `"found":false`. Each response includes
-`elapsedMicroseconds` (single-digit microseconds once warm) and `registrySize`.
-
-**Sorted-list range read:**
-
-```bash
-curl -s "http://localhost:5127/api/commands/nodes/ENV-001/timeline?minutes=15"
-curl -s "http://localhost:5127/api/commands/nodes/ENV-001/timeline?minutes=180"
-```
-
-Compare `logSize`, `entriesSkipped`, `entriesInWindow` and `rangeReadMicroseconds`
-between the two windows.
-
-**Undo / redo stacks and idempotency.** Use an online node. A live dispatch to a
-disconnected node is rejected with "is offline and cannot accept a dispatch".
-
-```bash
-# 1. Queue a live override and note the "id" in the response
-curl -s -X POST http://localhost:5127/api/commands -H "Content-Type: application/json" \
-  -d '{"nodeId":"PWR-002","commandType":"SetThreshold","parameters":"power.max=5","priority":"Normal","dryRun":false}'
-
-# 2. Inspect the stacks
-curl -s http://localhost:5127/api/commands/overrides
-
-# 3. Undo it (replace <id>). The outcome is "Cancelled" if it was still queued, otherwise "Reverted"
-curl -s -X POST http://localhost:5127/api/commands/overrides/undo -H "Content-Type: application/json" \
-  -d '{"expectedCommandId":"<id>"}'
-
-# 4. Send the same undo again. The outcome is "AlreadyUndone" and nothing else changes
-curl -s -X POST http://localhost:5127/api/commands/overrides/undo -H "Content-Type: application/json" \
-  -d '{"expectedCommandId":"<id>"}'
-
-# 5. Redo it. The outcome is "Redone", and the command is back on the undo stack
-curl -s -X POST http://localhost:5127/api/commands/overrides/redo -H "Content-Type: application/json" \
-  -d '{"expectedCommandId":"<id>"}'
-```
-
-**Duplicate disconnect suppression (HashSet).** This takes the node off the mesh,
-so use a node you do not need for the tests above. If the simulator has already
-disconnected `MOT-004` (it is listed under `disconnectedNodes` in the pipeline
-response), pick another node, or the first call will be suppressed too:
-
-```bash
-curl -s -X POST http://localhost:5127/api/commands/packets -H "Content-Type: application/json" \
-  -d '[{"nodeId":"MOT-004","linkUp":false}]'   # first loss: "processedCritical":1
-curl -s -X POST http://localhost:5127/api/commands/packets -H "Content-Type: application/json" \
-  -d '[{"nodeId":"MOT-004","linkUp":false}]'   # repeat:     "suppressedDuplicates":1
-```
-
-All runtime state is in memory, so restarting the API resets the queues, stacks and
-dictionaries to the seeded state.
 
 ## Code Attributions and Reference List
 
