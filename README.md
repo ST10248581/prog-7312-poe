@@ -13,45 +13,48 @@ It is built as two projects: an **ASP.NET Core Web API on .NET 10** (`smart-x-ba
 ```
 prog-7312-poe/
 ├── smart-x-backend/              # ASP.NET Core Web API (.NET 10)
-│   └── SmartX.Api/
-│       ├── Controllers/          # Thin API controllers — no business logic
-│       │   ├── AlertsController.cs
-│       │   ├── CommandsController.cs   # Page 2 — command stream, overrides, intake, insights
-│       │   ├── EngagementController.cs
-│       │   ├── MeshController.cs       # Ingestion, load arithmetic, deployment
-│       │   ├── SensorsController.cs
-│       │   ├── TelemetryController.cs
-│       │   └── TestController.cs       # Connectivity check
-│       ├── Configuration/        # Typed options: Frontend (CORS origins), Attachments (limits, key)
-│       ├── Logic/                # The two central service classes
-│       │   ├── Attachments/      # AttachmentPolicy (file allow-list, magic bytes), AttachmentCipher (AES-GCM)
-│       │   ├── ServiceResults.cs # WriteResult<T>: Success / NotFound / Conflict / Invalid
-│       │   ├── ISmartXTelemetryEngine.cs
-│       │   ├── ISensorService.cs / ITelemetryService.cs / IAlertService.cs / IEngagementService.cs
-│       │   ├── SmartXTelemetryEngine.cs    # Page 1 — telemetry
-│       │   ├── ISmartXCommandEngine.cs
-│       │   ├── SmartXCommandEngine.cs      # Page 2 — command stream (Part 2 data structures)
-│       │   ├── CommandDispatchSimulator.cs # 2 s timer that drives the command engine
-│       │   └── CommandGenerator.cs         # Builds and advances simulated commands
-│       ├── Data/                 # Repositories + in-memory data store (with indexes)
-│       │   ├── Collections/      # RingBuffer<T> — the custom fixed-capacity collection
-│       │   └── Seeding/          # Demo-data seeders (one per entity)
-│       ├── Models/               # Entities, requests, responses
-│       │   ├── Requests/         # CreateSensorRequest, IngestTelemetryRequest, ... (validated)
-│       │   ├── Validation/       # SensorRules (shared regexes), MacAddress normalisation
-│       │   ├── Responses/        # EcosystemSummary, SensorDetail, LoadComparison, ...
-│       │   ├── Stream/           # StreamPacket, PipelineStatus, NodeTimeline, SuggestedAction, ...
-│       │   └── Telemetry/        # TelemetryPacket<T>, SensorLoad, DeploymentNode
-│       ├── Properties/
-│       │   └── launchSettings.json     # http profile — port 5127
-│       ├── appsettings.json      # Frontend:AllowedOrigins, Attachments:* settings
-│       ├── Program.cs            # Entry point, DI registration, options, CORS, JSON options
-│       └── SmartX.Api.csproj     # Project file (net10.0)
+│   ├── SmartX.Api/
+│   │   ├── Controllers/          # Thin API controllers — no business logic
+│   │   │   ├── AlertsController.cs
+│   │   │   ├── CommandsController.cs   # Page 2 — command stream, overrides, intake, insights
+│   │   │   ├── EngagementController.cs
+│   │   │   ├── MeshController.cs       # Ingestion, load arithmetic, deployment
+│   │   │   ├── SensorsController.cs
+│   │   │   ├── TelemetryController.cs
+│   │   │   └── TestController.cs       # Connectivity check
+│   │   ├── Configuration/        # Typed options: Frontend (CORS origins), Attachments (limits, key)
+│   │   ├── Logic/                # The two central service classes
+│   │   │   ├── Attachments/      # AttachmentPolicy (file allow-list, magic bytes), AttachmentCipher (AES-GCM)
+│   │   │   ├── ServiceResults.cs # WriteResult<T>: Success / NotFound / Conflict / Invalid
+│   │   │   ├── ISmartXTelemetryEngine.cs
+│   │   │   ├── ISensorService.cs / ITelemetryService.cs / IAlertService.cs / IEngagementService.cs
+│   │   │   ├── SmartXTelemetryEngine.cs    # Page 1 — telemetry
+│   │   │   ├── ISmartXCommandEngine.cs
+│   │   │   ├── SmartXCommandEngine.cs      # Page 2 — command stream (Part 2 data structures)
+│   │   │   ├── CommandDispatchSimulator.cs # 2 s timer that drives the command engine
+│   │   │   ├── DeviceTelemetrySimulator.cs # Emulated devices posting packets over HTTP every 2 s
+│   │   │   ├── CommandGenerator.cs         # Builds and advances simulated commands
+│   │   │   └── TestService.cs              # Backs the /api/test connectivity check
+│   │   ├── Data/                 # Repositories + in-memory data store (with indexes)
+│   │   │   ├── Collections/      # RingBuffer<T> — the custom fixed-capacity collection
+│   │   │   └── Seeding/          # Demo-data seeders (one per entity)
+│   │   ├── Models/               # Entities, requests, responses
+│   │   │   ├── Requests/         # CreateSensorRequest, IngestTelemetryRequest, ... (validated)
+│   │   │   ├── Validation/       # SensorRules (shared regexes), MacAddress normalisation
+│   │   │   ├── Responses/        # EcosystemSummary, SensorDetail, LoadComparison, ...
+│   │   │   ├── Stream/           # StreamPacket, PipelineStatus, NodeTimeline, SuggestedAction, ...
+│   │   │   └── Telemetry/        # TelemetryPacket<T>, SensorLoad, DeploymentNode
+│   │   ├── Properties/
+│   │   │   └── launchSettings.json     # http profile — port 5127
+│   │   ├── appsettings.json      # Frontend:AllowedOrigins, Attachments:* settings
+│   │   ├── Program.cs            # Entry point, DI registration, options, CORS, JSON options
+│   │   └── SmartX.Api.csproj     # Project file (net10.0)
+│   └── SmartX.Api.Tests/         # xUnit tests: intake queues, sets, undo/redo, RingBuffer
 ├── smart-x-front-end/            # React 19 + TypeScript (Vite)
 │   ├── src/
 │   │   ├── pages/                # Route-level pages
 │   │   │   ├── TelemetryPage.tsx       # Page 1 — the telemetry dashboard
-│   │   │   ├── HomePage.tsx            # Overview landing page (brand link)
+│   │   │   ├── HomePage.tsx            # Overview landing page at /
 │   │   │   ├── CommandsPage.tsx        # Page 2 — command stream and history
 │   │   │   └── NotFoundPage.tsx        # 404 for unknown routes
 │   │   ├── components/
@@ -150,9 +153,10 @@ setting stops the API immediately instead of failing on the first request.
 
 1. Start the backend API.
 2. Start the frontend dev server.
-3. Open http://localhost:5173 — `/` redirects to `/telemetry`, and the dashboard
-   loads live data from the API. Sensor tiles, the ecosystem summary and the alert
-   feed populating is itself confirmation that the connection works.
+3. Open http://localhost:5173. `/` shows the **Smart-X Mesh Overview** with live
+   mesh health and counts, and links to both pages. Open **Sensor Data Ingestion
+   and Telemetry** (`/telemetry`): if the sensor tiles, ecosystem summary and alert
+   feed fill with data, the connection works.
 4. To check the API on its own, call the connectivity endpoint directly:
    `GET http://localhost:5127/api/test`.
 
@@ -170,8 +174,8 @@ never leaves the UI hanging.
 | Route | Page | State |
 | --- | --- | --- |
 | `/` | `HomePage` | Overview — mesh health, live counts, and where each module resumes |
-| `/telemetry` | `TelemetryPage` | Implemented — the dashboard |
-| `/commands` | `CommandsPage` | Implemented — command stream, manual overrides with undo, telemetry intake, Suggested Actions & Automated Insights |
+| `/telemetry` | `TelemetryPage` | Page 1 — Sensor Data Ingestion and Telemetry: overview tiles, filters, sensor detail, registration, attachments, mesh topology |
+| `/commands` | `CommandsPage` | Page 2 — Real-Time Command Stream and History: command stream, manual overrides with undo/redo, telemetry intake, device lookup, node timeline, Suggested Actions & Automated Insights |
 | `*` | `NotFoundPage` | 404 with links back to each module |
 
 ## Manual Testing
@@ -408,15 +412,21 @@ The dashboard shows each message under the input it belongs to.
 | `GET` | `/api/commands/filter-options` | Filter values, targetable nodes and their capabilities |
 | `POST` | `/api/commands` | Queue a manual override |
 | `GET` | `/api/commands/overrides` | The undo stack, most recent first |
-| `POST` | `/api/commands/overrides/undo` | Undo the most recent override |
+| `POST` | `/api/commands/overrides/undo` | Undo the most recent override — 200, or 409 when there is nothing to undo |
+| `POST` | `/api/commands/overrides/redo` | Re-apply the most recently undone override — 200, or 409 when there is nothing to redo |
 | `POST` | `/api/commands/packets` | Telemetry intake (standard queue / critical lane) |
-| `GET` | `/api/commands/pipeline` | Queue depths, error states, disconnected nodes, recent alerts |
-| `GET` | `/api/commands/nodes/{nodeId}/timeline` | A node's sorted log, ready to chart |
+| `GET` | `/api/commands/pipeline?known=` | Queue depths, error states, disconnected nodes, recent alerts, and set changes since the `known` list |
+| `GET` | `/api/commands/nodes/{nodeId}/timeline?minutes=` | A node's sorted log for the window, ready to chart |
 | `GET` | `/api/commands/devices` | Every device matching category / alert state / severity / zone / search, with its latest readings |
+| `GET` | `/api/commands/devices/lookup?key=` | Exact O(1) lookup by node id or MAC address, with the probe time |
 | `GET` | `/api/commands/insights` | Suggested Actions & Automated Insights |
+| `POST` | `/api/commands/insights/feedback` | Record that a suggestion was applied or dismissed (re-ranks it) |
+| `POST` | `/api/commands/insights/reset` | Clear everything the recommendation engine has learned |
 | `POST` | `/api/commands/activity` | Record a search or node selection for the action engine |
 
 ## Key Features
+
+### Page 1 — Sensor Data Ingestion and Telemetry
 
 | Feature | What it does | Where it lives |
 | --- | --- | --- |
@@ -424,7 +434,7 @@ The dashboard shows each message under the input it belongs to.
 | **Device status monitoring** | Shows devices as Online, Warning or Offline | `SensorCard.tsx`, `StatTile.tsx` |
 | **Anomaly detection** | Flags readings outside the thresholds defined per reading type | `ReadingTypeProfile.cs`, `SmartXTelemetryEngine` |
 | **Proactive alerts** | Alert feed for disconnections and abnormal telemetry | `AlertFeed.tsx` ← `GET /api/alerts` |
-| **Filtering** | Narrows the view by device, sensor type, status or time period | `FilterBar.tsx` ← `GET /api/sensors/filter-options` |
+| **Filtering** | Narrows the sensor grid by status, category and zone, with an "Anomalies only" toggle | `FilterBar.tsx` ← `GET /api/sensors/filter-options` |
 | **Guided troubleshooting** | Structured next steps for investigating a device | `TroubleshootingGuide.tsx` |
 | **Progressive disclosure** | Summary tiles and cards first; full diagnostics behind a detail modal | `StatTile.tsx` → `SensorCard.tsx` → `SensorDetailModal.tsx` → `SensorDetailPanel.tsx` |
 | **Mesh insights** | Aggregate load and the validated deployment tree | `MeshInsights.tsx`, `DeploymentTree.tsx` ← `/api/mesh/*` |
@@ -438,13 +448,14 @@ The dashboard shows each message under the input it belongs to.
 | Feature | What it does | Where it lives |
 | --- | --- | --- |
 | **Suggested Actions & Automated Insights** | Predictive recommendations learned from operator searches, selections and overrides, plus devices flagged as likely faulty — shown before the operator searches for them | `SuggestedActions.tsx` ← `GET /api/commands/insights`, `POST /api/commands/activity` |
+| **Live refresh** | Stream, history, devices, pipeline, insights and timeline poll every 3 seconds; the **Live** button pauses and resumes them | `CommandsPage.tsx` (`REFRESH_MS`), `usePolling.ts` |
 | **Live command stream** | Newest commands first; selecting a row targets the override console at that node | `CommandStream.tsx` ← `GET /api/commands/stream` |
 | **Command history** | The paged audit trail behind the stream, using the same filter | `CommandHistoryTable.tsx` ← `GET /api/commands` |
-| **Filtering and search** | Narrows the stream, history and devices by status, origin, category, alert state, zone or free text | `CommandFilterBar.tsx` ← `GET /api/commands/filter-options` |
-| **Manual overrides with undo** | Queues a command against a node; undo reverses the most recent override | `OverrideConsole.tsx` ← `POST /api/commands`, `/api/commands/overrides/*` |
+| **Filtering and search** | Narrows the stream, history and devices by free text, device category, operation category, node alert state, status, origin, command type, zone and time window | `CommandFilterBar.tsx` ← `GET /api/commands/filter-options` |
+| **Manual overrides with undo and redo** | Queues a command against a node (or logs it as a dry run). Undo reverses the most recent live override; redo re-applies the last undone one | `OverrideConsole.tsx` ← `POST /api/commands`, `/api/commands/overrides/*` |
 | **Telemetry intake** | Routine FIFO lane and critical priority lane, with duplicate-alert suppression | `IngestPipeline.tsx` ← `GET /api/commands/pipeline` |
-| **Live devices** | Every matching device with its latest readings, worst first | `LiveDevicePanel.tsx` ← `GET /api/commands/devices` |
-| **Node timeline** | A node's readings, limits, commands and alerts over the last hour | `NodeTimeline.tsx` ← `GET /api/commands/nodes/{nodeId}/timeline` |
+| **Live devices and instant lookup** | Every matching device with its latest readings and sparklines, worst first. Instant lookup finds one device by node id or MAC address and shows the probe time | `LiveDevicePanel.tsx` ← `GET /api/commands/devices`, `/api/commands/devices/lookup` |
+| **Node timeline** | A node's readings, limits, commands and alerts over a 5 min, 15 min, 1 h or 3 h window, with the range-read statistics | `NodeTimeline.tsx` ← `GET /api/commands/nodes/{nodeId}/timeline` |
 | **Throughput** | Dispatch rate per minute over the selected window | `ThroughputStrip.tsx` ← `GET /api/commands/summary` |
 
 ### Data storage
@@ -543,14 +554,16 @@ public sealed class TelemetryPacket<T> : ITelemetryPacket where T : struct
 ```
 
 The mesh is deliberately mixed hardware, and the engine closes a different generic
-instantiation per encoding — exactly the disparate cases the requirement describes:
+instantiation per encoding — exactly the disparate cases the requirement describes.
+`DefaultPayloadKind` picks the encoding from the reading type, and a gateway can
+override it with `payloadKind` in the ingest body:
 
 | Metric | Payload | Instantiation |
 | --- | --- | --- |
 | Temperature, Humidity, Pressure, Vibration | 32-bit float from low-power nodes | `TelemetryPacket<float>` |
 | Power | fractional kW | `TelemetryPacket<double>` |
-| Whole-unit counters | integer | `TelemetryPacket<int>` |
-| Smart-switch trigger | single bit | `TelemetryPacket<bool>` |
+| Motion | single bit (triggered / clear) | `TelemetryPacket<bool>` |
+| Any metric sent with `"payloadKind": "Int"` | whole-unit integer | `TelemetryPacket<int>` |
 
 ```csharp
 private static ITelemetryPacket CreatePacket(..., TelemetryPayloadKind payloadKind, ...)
@@ -708,10 +721,10 @@ overflowing the stack: a depth guard (`MaxDeploymentDepth`), and an `ancestors` 
 the nodes on the current path, which detects a profile that loops back on itself. Leaf
 nodes return without recursing.
 
-Two entry points use the same walk: `ValidateDeployment(zone)` projects the live sensor
-register into a tree and validates what is actually deployed, while
-`ValidateDeployment(DeploymentNode root)` validates a proposed configuration profile
-before it is rolled out.
+Two entry points use the same walk: `ValidateDeploymentAsync(zone)` projects the live
+sensor register into a tree (`BuildDeploymentTree`) and validates what is actually
+deployed, while `ValidateDeploymentAsync(DeploymentNode root)` validates a proposed
+configuration profile before it is rolled out.
 
 ### Endpoints exercising this logic
 
@@ -766,7 +779,7 @@ seen half-updated.
 | Requirement | Structure | Where | What it does |
 | --- | --- | --- | --- |
 | Message queue | `Queue<StreamPacket> _standardLane` | `Enqueue`, `DrainStandardLane` | Routine telemetry packets are processed first in, first out, at a budget of 20 per tick. A gateway burst backs the queue up and it drains over the next ticks. **Backpressure:** the queue holds at most 1 000 packets; past that the oldest are shed and counted (`Dropped`), so a flood cannot grow memory or make every later packet wait longer. The critical lane is never shed. |
-| Priority queue | `PriorityQueue<StreamPacket, (int Rank, long Ticks)> _criticalLane` | `Classify`, `Enqueue`, `DrainCriticalLane` | A packet is classified before it is queued. A severe power spike, a moisture crash (≥ 25 % of the span past the limit, or a threshold marked critical) or a lost link goes to the priority queue, which is drained **immediately**: in the same request for posted packets, and ahead of the FIFO on every tick. The worst breach is dequeued first, with ties in arrival order. Each critical packet records how many queued standard packets it overtook (`BypassedStandard`). |
+| Priority queue | `PriorityQueue<StreamPacket, (int Rank, long ReceivedTicks)> _criticalLane` | `Classify`, `Enqueue`, `DrainCriticalLane` | A packet is classified before it is queued. A severe power spike, a moisture crash (≥ 25 % of the span past the limit, or a threshold marked critical) or a lost link goes to the priority queue, which is drained **immediately**: in the same request for posted packets, and ahead of the FIFO on every tick. The worst breach is dequeued first, with ties in arrival order. Each critical packet records how many queued standard packets it overtook (`BypassedStandard`). |
 | Stack (undo) | `Stack<OverrideHistoryEntry> _overrideHistory` | `Dispatch`, `UndoLastOverride` | Every live manual override is pushed with a revert plan worked out at issue time (the value it replaced). Undo pops the top: a queued command is cancelled; a sent one gets its inverse at Immediate priority (for example, "shut down valves" becomes "open them again", and a threshold or firmware change is restored to the previous value). A restart or a sample request is reported as irreversible. |
 | Stack (redo) | `Stack<OverrideHistoryEntry> _redoHistory` | `UndoLastOverride`, `RedoLastUndo`, `Dispatch` | A cancelled or reverted override is pushed here. Redo pops it, re-sends the same command, and pushes it back onto the undo stack with a fresh revert plan. A new manual override clears the redo stack, as in any editor. |
 | Idempotency | `ExpectedCommandId` on both requests | `UndoLastOverride`, `RedoLastUndo` | The console sends the id of the entry it shows on top. If that entry was already undone (a double click, or a retried request), the API answers `AlreadyUndone` and changes nothing, instead of undoing the next override down. The buttons are disabled while a request is out, and when their stack is empty. |
@@ -880,7 +893,7 @@ simulator raises the first breach or disconnection.
 
 ### Navigation and preserved state
 
-* **Overview at `/`.** The brand link opens a landing page with mesh health, alerts,
+* **Overview at `/`.** The **Overview** nav link (and the brand logo) opens a landing page with mesh health, alerts,
   commands in flight and "needs attention". It has a card per module that says where
   that module will resume ("Resume on ENV-001 with filters →").
 * **Live nav badges.** Active alerts on the telemetry link and commands in flight on
@@ -1030,13 +1043,16 @@ running end to end:
   store seeded at startup. `SmartXTelemetryEngine` exercises the four Part 1 C#
   concepts; `SmartXCommandEngine` exercises the Part 2 data structures and the
   recommendation engine.
-* **Frontend** — an overview at `/`, and `/telemetry` and `/commands`, all consuming
-  the API, with page state kept across navigation. The Network Topology module is
-  not in the navbar until it is built.
+* **Frontend** — two working pages, **Sensor Data Ingestion and Telemetry**
+  (`/telemetry`) and **Real-Time Command Stream and History** (`/commands`), plus an
+  overview at `/`. All three consume the API and keep their state across
+  navigation. See [Manual Testing](#manual-testing) for a walkthrough of each page.
+  The Network Topology module is not in the navbar until it is built.
+* **Connectivity** — `ApiStatusBanner` checks `/api/test` on every load; the old
+  `TestPage.tsx` has been removed.
 
 Known gaps, recorded rather than hidden:
 
-* Backend tests cover the Part 2 data structures and `RingBuffer<T>` (`SmartX.Api.Tests`); the frontend has no automated tests.
+* Backend tests cover the Part 2 data structures and `RingBuffer<T>` (`SmartX.Api.Tests`).
+  The Part 1 concepts are checked manually, and the frontend has no automated tests.
 * No persistence layer — all runtime data is lost on restart.
-* `src/pages/TestPage.tsx` has been removed; `ApiStatusBanner` now performs the
-  connectivity check on every load.
