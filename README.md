@@ -299,6 +299,8 @@ command stream and history to commands sent to those devices.
    seconds after the API starts.
 2. Click a card's **Apply: …** button. It sends the command, runs the search or
    inspects the node. If it sent a command, a toast confirms it and offers **Undo**.
+   **Inspect &lt;node&gt;** targets the override console at that node and scrolls down
+   to its **Node timeline**. Device cards and intake chips do the same.
 3. Dismiss another card. It disappears, and the engine ranks it lower from then on.
 4. In **What the engine has learned**, check the rule counts and your recent
    activity. Click **Reset learning** to empty it, then search or inspect a few

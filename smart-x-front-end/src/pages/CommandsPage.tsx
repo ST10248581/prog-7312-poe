@@ -327,6 +327,26 @@ function CommandsPage() {
     [setTargetNode]
   );
 
+  // Inspecting from the panels above the stream (a suggestion, a device card,
+  // an intake chip) opens the node's timeline far below where the operator
+  // clicked, so the page also brings it into view. The counter re-scrolls even
+  // when the same node is inspected twice.
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const [timelineScrolls, setTimelineScrolls] = useState(0);
+
+  const inspectNode = useCallback(
+    (nodeId: string) => {
+      focusNode(nodeId);
+      setTimelineScrolls((count) => count + 1);
+    },
+    [focusNode]
+  );
+
+  useEffect(() => {
+    if (timelineScrolls === 0) return;
+    timelineRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [timelineScrolls]);
+
   // Selecting a row aims the override console at that node — correcting a bad
   // command should not mean retyping its target.
   const handleSelect = (command: CommandRecord) => {
@@ -427,11 +447,11 @@ function CommandsPage() {
       } else if (suggestion.filterFacet && suggestion.filterValue) {
         handleFilterChange(withFilter(filters, suggestion.filterFacet, suggestion.filterValue));
       } else if (suggestion.nodeId) {
-        focusNode(suggestion.nodeId);
+        inspectNode(suggestion.nodeId);
       }
       void loadEngine();
     },
-    [handleDispatch, handleUndo, handleFilterChange, filters, focusNode, loadEngine, setTargetNode, toast]
+    [handleDispatch, handleUndo, handleFilterChange, filters, inspectNode, loadEngine, setTargetNode, toast]
   );
 
   const handleDismiss = useCallback(
@@ -676,7 +696,7 @@ function CommandsPage() {
             onApply={handleApply}
             onPrepare={handlePrepare}
             onDismiss={handleDismiss}
-            onInspect={focusNode}
+            onInspect={inspectNode}
           />
 
           <LearningPanel insights={insights} onReset={handleResetLearning} />
@@ -686,7 +706,7 @@ function CommandsPage() {
           pipeline={pipeline}
           onSimulateSpike={handleSimulateSpike}
           onSimulateFlood={handleSimulateFlood}
-          onInspect={focusNode}
+          onInspect={inspectNode}
         />
       </div>
 
@@ -698,7 +718,7 @@ function CommandsPage() {
         error={devicesError}
         selectedNode={targetNode}
         filtered={hasActiveFilters(filters)}
-        onInspect={focusNode}
+        onInspect={inspectNode}
         filters={
           <CommandFilterBar
             scope="device"
@@ -740,6 +760,9 @@ function CommandsPage() {
               />
             }
           />
+
+          {/* Scroll target for inspecting a node from the panels above. */}
+          <div ref={timelineRef} className="commands-anchor" aria-hidden="true" />
 
           {targetNode && (
             <NodeTimeline

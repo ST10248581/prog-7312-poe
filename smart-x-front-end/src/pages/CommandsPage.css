@@ -842,6 +842,9 @@
   min-width: 0;
 }
 
+/* The timeline anchor sits in the main column's flex gap; it takes no room. */
+.commands-main > .commands-anchor { margin-top: -1rem; }
+
 .commands-anchor {
   scroll-margin-top: calc(var(--nav-height) + 1rem);
 }
