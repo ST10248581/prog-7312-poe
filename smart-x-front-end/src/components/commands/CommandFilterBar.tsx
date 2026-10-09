@@ -14,7 +14,6 @@ import {
   SENSOR_CATEGORY_HINTS,
   TIME_WINDOWS,
   describeFilters,
-  hasActiveFilters,
   removeFilter,
 } from "./types";
 import type { AlertSeverity, CommandFilters, OperationCategory, SensorCategory } from "./types";
@@ -26,17 +25,47 @@ import type { CommandFilterOptions } from "../../services/apiService";
  */
 const SEARCH_DEBOUNCE_MS = 350;
 
+/**
+ * Which half of the filter a bar edits. The device half describes the node —
+ * it narrows the live device panel and the commands sent to those nodes — and
+ * sits on the device panel. The command half describes the command itself and
+ * sits on the stream, the only lists it affects.
+ */
+export type FilterScope = "device" | "command";
+
+const SCOPE_KEYS: Record<FilterScope, readonly (keyof CommandFilters)[]> = {
+  device: ["search", "zone", "sensorCategories", "alertStates", "minAlertSeverity"],
+  command: ["statuses", "origins", "commandTypes", "operationCategories", "manualOnly", "windowMinutes"],
+};
+
+/** The filters with this scope's facets back at their defaults. */
+function clearScope(filters: CommandFilters, scope: FilterScope): CommandFilters {
+  const next = { ...filters };
+  for (const key of SCOPE_KEYS[scope]) {
+    (next as Record<string, unknown>)[key] = EMPTY_FILTERS[key];
+  }
+  return next;
+}
+
+function scopeIsActive(filters: CommandFilters, scope: FilterScope): boolean {
+  return SCOPE_KEYS[scope].some(
+    (key) => JSON.stringify(filters[key]) !== JSON.stringify(EMPTY_FILTERS[key]),
+  );
+}
+
 interface CommandFilterBarProps {
+  scope: FilterScope;
   /** Straight from `/api/commands/filter-options`; null until it arrives. */
   options: CommandFilterOptions | null;
   filters: CommandFilters;
-  resultCount: number;
-  totalCount: number;
-  /** Per-category counts from the summary, so a chip can show what it holds. */
+  /** Command scope: commands streaming, and the total matching. */
+  resultCount?: number;
+  totalCount?: number;
+  /** Command scope: per-category counts from the summary, so a chip can show what it holds. */
   categoryCounts?: Record<string, number>;
   /**
-   * Device counts from `/api/commands/devices`, per device category and per
-   * alert state, so those chips say how many devices they select.
+   * Device scope: counts from `/api/commands/devices`, per device category and
+   * per alert state, so those chips say how many devices they select.
    */
   deviceCounts?: {
     categories: Record<string, number>;
@@ -46,8 +75,8 @@ interface CommandFilterBarProps {
 }
 
 /**
- * One filter state for the whole page — the stream, the throughput strip and
- * the history table all describe the same slice.
+ * One filter state for the whole page, edited from two compact bars, each next
+ * to the lists it narrows.
  *
  * Every control only edits `filters` and hands it back up; the page owns the
  * request and refetches on every change, so this component never narrows a
@@ -55,6 +84,7 @@ interface CommandFilterBarProps {
  * standing in only until that first response lands.
  */
 function CommandFilterBar({
+  scope,
   options,
   filters,
   resultCount,
@@ -76,7 +106,7 @@ function CommandFilterBar({
   }, [filters.search]);
 
   useEffect(() => {
-    if (searchDraft === filters.search) {
+    if (scope !== "device" || searchDraft === filters.search) {
       return;
     }
 
@@ -86,7 +116,7 @@ function CommandFilterBar({
     );
 
     return () => window.clearTimeout(timer);
-  }, [searchDraft, filters, onChange]);
+  }, [scope, searchDraft, filters, onChange]);
 
   const statuses = options?.statuses ?? COMMAND_STATUSES;
   const origins = options?.origins ?? COMMAND_ORIGINS;
@@ -127,209 +157,161 @@ function CommandFilterBar({
   const isActive = (key: ChipKey, value: string) =>
     (filters[key] as string[]).includes(value);
 
-  const activeChips = describeFilters(filters);
+  // Only this bar's own facets, so each summary describes the list beneath it.
+  const activeChips = describeFilters(filters).filter((chip) =>
+    SCOPE_KEYS[scope].includes(chip.key),
+  );
+
+  const clearButton = scopeIsActive(filters, scope) && (
+    <button type="button" className="filter-clear" onClick={() => onChange(clearScope(filters, scope))}>
+      Clear
+    </button>
+  );
+
+  // Everything this bar is narrowing, each removable — an empty list is then
+  // never misread as a stalled feed rather than a filter nobody remembers.
+  const summary = activeChips.length > 0 && (
+    <div className="filter-active" aria-label="Active filters">
+      <span className="filter-group-label">Filtering by</span>
+      {activeChips.map((chip) => (
+        <button
+          key={`${chip.key}-${chip.value}`}
+          type="button"
+          className="filter-active-chip"
+          title={`Remove ${chip.label}`}
+          onClick={() => onChange(removeFilter(filters, chip.key, chip.value))}
+        >
+          {chip.label}
+          <span aria-hidden="true">×</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  if (scope === "device") {
+    return (
+      <div className="filter-bar compact-filter-bar" role="search" aria-label="Filter devices">
+        <div className="filter-row">
+          {/* Search leads: it is the fastest way to a node, and the API matches
+              it against MACs, zones, operators and command labels too. */}
+          <div className="filter-search-wrap">
+            <label className="visually-hidden" htmlFor="command-search">
+              Search
+            </label>
+            <input
+              id="command-search"
+              type="search"
+              className="filter-search"
+              placeholder="Search device, MAC, zone, category, operator or command…"
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+            />
+            {searchDraft !== filters.search && (
+              <span className="filter-search-pending" aria-live="polite">
+                searching…
+              </span>
+            )}
+          </div>
+
+          <select
+            className="filter-select"
+            aria-label="Zone"
+            value={filters.zone}
+            onChange={(event) => onChange({ ...filters, zone: event.target.value })}
+          >
+            <option value="">All zones</option>
+            {zones.map((zone) => (
+              <option key={zone} value={zone}>
+                {zone}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="filter-select"
+            aria-label="Alert severity"
+            value={filters.minAlertSeverity}
+            onChange={(event) =>
+              onChange({
+                ...filters,
+                minAlertSeverity: event.target.value as AlertSeverity | "",
+              })
+            }
+          >
+            <option value="">Any severity</option>
+            {severities.map((severity) => (
+              <option key={severity} value={severity}>
+                {severity} and above
+              </option>
+            ))}
+          </select>
+
+          {clearButton}
+        </div>
+
+        <div className="filter-row">
+          <div className="filter-group">
+            <span className="filter-group-label">Category</span>
+            <div className="filter-chips">
+              {sensorCategories.map((category) => {
+                const count = deviceCounts?.categories[category];
+
+                return (
+                  <button
+                    key={category}
+                    type="button"
+                    className={`filter-chip device-category-${category.toLowerCase()}${
+                      isActive("sensorCategories", category) ? " active" : ""
+                    }`}
+                    title={SENSOR_CATEGORY_HINTS[category]}
+                    onClick={() => toggle("sensorCategories", category)}
+                  >
+                    {humanise(category)}
+                    {count !== undefined && <span className="filter-chip-count">{count}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* The alert facet describes the node, not the command — so it also
+              answers "what is being sent to the nodes alerting right now". */}
+          <div className="filter-group">
+            <span className="filter-group-label">Node alert</span>
+            <div className="filter-chips">
+              {alertStates.map((state) => (
+                <button
+                  key={state}
+                  type="button"
+                  className={`filter-chip alert-state-${state.toLowerCase()}${
+                    isActive("alertStates", state) ? " active" : ""
+                  }`}
+                  title={ALERT_STATE_HINTS[state]}
+                  onClick={() => toggle("alertStates", state)}
+                >
+                  <span className="filter-chip-dot" />
+                  {state}
+                  {deviceCounts?.alertStates[state] !== undefined && (
+                    <span className="filter-chip-count" title="Devices in this state">
+                      {deviceCounts.alertStates[state]}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {summary}
+      </div>
+    );
+  }
 
   return (
-    <section className="filter-bar command-filter-bar" aria-label="Search and filter commands">
-      {/* Search leads: it is the fastest way to a node, and the API matches it
-          against the command type and category labels too, so typing a category
-          name works before the chips below are even read. */}
-      <div className="filter-group filter-group-search">
-        <label className="filter-group-label" htmlFor="command-search">
-          Search
-        </label>
-        <div className="filter-search-wrap">
-          <input
-            id="command-search"
-            type="search"
-            className="filter-search"
-            placeholder="Device, MAC, zone, category, operator or command…"
-            value={searchDraft}
-            onChange={(event) => setSearchDraft(event.target.value)}
-          />
-          {searchDraft !== filters.search && (
-            <span className="filter-search-pending" aria-live="polite">
-              searching…
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Device facets lead: they narrow the live device panel and the traffic
-          sent to those devices at once. */}
-      <div className="filter-group">
-        <span className="filter-group-label">Device category</span>
-        <div className="filter-chips">
-          {sensorCategories.map((category) => {
-            const count = deviceCounts?.categories[category];
-
-            return (
-              <button
-                key={category}
-                type="button"
-                className={`filter-chip device-category-${category.toLowerCase()}${
-                  isActive("sensorCategories", category) ? " active" : ""
-                }`}
-                title={SENSOR_CATEGORY_HINTS[category]}
-                onClick={() => toggle("sensorCategories", category)}
-              >
-                {humanise(category)}
-                {count !== undefined && <span className="filter-chip-count">{count}</span>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="filter-group">
-        <span className="filter-group-label">Operation category</span>
-        <div className="filter-chips">
-          {categories.map((category) => {
-            const count = categoryCounts?.[category];
-
-            return (
-              <button
-                key={category}
-                type="button"
-                className={`filter-chip category-${category.toLowerCase()}${
-                  isActive("operationCategories", category) ? " active" : ""
-                }`}
-                title={`${CATEGORY_HINTS[category]}${
-                  categoryTypes(category) ? ` — ${categoryTypes(category)}` : ""
-                }`}
-                onClick={() => toggle("operationCategories", category)}
-              >
-                {category}
-                {count !== undefined && <span className="filter-chip-count">{count}</span>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* The alert facet describes the node a command was aimed at, not the
-          command itself — the "what was being sent to the nodes that are
-          alerting right now" question. */}
-      <div className="filter-group">
-        <span className="filter-group-label">Node alert</span>
-        <div className="filter-chips">
-          {alertStates.map((state) => (
-            <button
-              key={state}
-              type="button"
-              className={`filter-chip alert-state-${state.toLowerCase()}${
-                isActive("alertStates", state) ? " active" : ""
-              }`}
-              title={ALERT_STATE_HINTS[state]}
-              onClick={() => toggle("alertStates", state)}
-            >
-              <span className="filter-chip-dot" />
-              {state}
-              {deviceCounts?.alertStates[state] !== undefined && (
-                <span className="filter-chip-count" title="Devices in this state">
-                  {deviceCounts.alertStates[state]}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="filter-group">
-        <label className="filter-group-label" htmlFor="command-severity">
-          Alert severity
-        </label>
-        <select
-          id="command-severity"
-          className="filter-select"
-          value={filters.minAlertSeverity}
-          onChange={(event) =>
-            onChange({
-              ...filters,
-              minAlertSeverity: event.target.value as AlertSeverity | "",
-            })
-          }
-        >
-          <option value="">Any severity</option>
-          {severities.map((severity) => (
-            <option key={severity} value={severity}>
-              {severity} and above
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="filter-group">
-        <span className="filter-group-label">Status</span>
-        <div className="filter-chips">
-          {statuses.map((status) => (
-            <button
-              key={status}
-              type="button"
-              className={`filter-chip cmd-status-${status.toLowerCase()}${
-                isActive("statuses", status) ? " active" : ""
-              }`}
-              onClick={() => toggle("statuses", status)}
-            >
-              <span className="filter-chip-dot" />
-              {status}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="filter-group">
-        <span className="filter-group-label">Origin</span>
-        <div className="filter-chips">
-          {origins.map((origin) => (
-            <button
-              key={origin}
-              type="button"
-              className={`filter-chip${isActive("origins", origin) ? " active" : ""}`}
-              onClick={() => toggle("origins", origin)}
-            >
-              {origin}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="filter-group">
-        <span className="filter-group-label">Command</span>
-        <div className="filter-chips">
-          {commandTypes.map((type) => (
-            <button
-              key={type}
-              type="button"
-              className={`filter-chip${isActive("commandTypes", type) ? " active" : ""}`}
-              onClick={() => toggle("commandTypes", type)}
-            >
-              {humanise(type)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="filter-group">
-        <span className="filter-group-label">Zone</span>
-        <select
-          className="filter-select"
-          value={filters.zone}
-          onChange={(event) => onChange({ ...filters, zone: event.target.value })}
-        >
-          <option value="">All zones</option>
-          {zones.map((zone) => (
-            <option key={zone} value={zone}>
-              {zone}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Window is a segmented control rather than a chip row: the options are
-          mutually exclusive, so multi-select styling would mislead. */}
-      <div className="filter-group">
-        <span className="filter-group-label">Window</span>
+    <div className="filter-bar compact-filter-bar" role="group" aria-label="Filter commands">
+      <div className="filter-row">
+        {/* Window is a segmented control rather than a chip row: the options are
+            mutually exclusive, so multi-select styling would mislead. */}
         <div className="filter-segment" role="group" aria-label="Time window">
           {TIME_WINDOWS.map((window) => (
             <button
@@ -345,53 +327,104 @@ function CommandFilterBar({
             </button>
           ))}
         </div>
-      </div>
 
-      <div className="filter-actions">
+        <div className="filter-group">
+          <span className="filter-group-label">Status</span>
+          <div className="filter-chips">
+            {statuses.map((status) => (
+              <button
+                key={status}
+                type="button"
+                className={`filter-chip cmd-status-${status.toLowerCase()}${
+                  isActive("statuses", status) ? " active" : ""
+                }`}
+                onClick={() => toggle("statuses", status)}
+              >
+                <span className="filter-chip-dot" />
+                {status}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="filter-group">
+          <span className="filter-group-label">Origin</span>
+          <div className="filter-chips">
+            {origins.map((origin) => (
+              <button
+                key={origin}
+                type="button"
+                className={`filter-chip${isActive("origins", origin) ? " active" : ""}`}
+                onClick={() => toggle("origins", origin)}
+              >
+                {origin}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <button
           type="button"
           className={`filter-toggle${filters.manualOnly ? " active" : ""}`}
           onClick={() => onChange({ ...filters, manualOnly: !filters.manualOnly })}
         >
-          Manual overrides only
+          Manual only
         </button>
-
-        <span className="filter-count">
-          <strong>{resultCount}</strong> streaming of {totalCount} matching
-        </span>
-
-        {hasActiveFilters(filters) && (
-          <button
-            type="button"
-            className="filter-clear"
-            onClick={() => onChange(EMPTY_FILTERS)}
-          >
-            Clear
-          </button>
-        )}
       </div>
 
-      {/* Everything narrowing the slice, in one row. With eight facets spread
-          across the bar, an empty stream is otherwise easy to misread as a
-          stalled feed rather than a filter nobody remembers setting. */}
-      {activeChips.length > 0 && (
-        <div className="filter-active" aria-label="Active filters">
-          <span className="filter-group-label">Filtering by</span>
-          {activeChips.map((chip) => (
-            <button
-              key={`${chip.key}-${chip.value}`}
-              type="button"
-              className="filter-active-chip"
-              title={`Remove ${chip.label}`}
-              onClick={() => onChange(removeFilter(filters, chip.key, chip.value))}
-            >
-              {chip.label}
-              <span aria-hidden="true">×</span>
-            </button>
-          ))}
+      <div className="filter-row">
+        <div className="filter-group">
+          <span className="filter-group-label">Operation</span>
+          <div className="filter-chips">
+            {categories.map((category) => {
+              const count = categoryCounts?.[category];
+
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  className={`filter-chip category-${category.toLowerCase()}${
+                    isActive("operationCategories", category) ? " active" : ""
+                  }`}
+                  title={`${CATEGORY_HINTS[category]}${
+                    categoryTypes(category) ? ` — ${categoryTypes(category)}` : ""
+                  }`}
+                  onClick={() => toggle("operationCategories", category)}
+                >
+                  {category}
+                  {count !== undefined && <span className="filter-chip-count">{count}</span>}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      )}
-    </section>
+
+        <div className="filter-group">
+          <span className="filter-group-label">Command</span>
+          <div className="filter-chips">
+            {commandTypes.map((type) => (
+              <button
+                key={type}
+                type="button"
+                className={`filter-chip${isActive("commandTypes", type) ? " active" : ""}`}
+                onClick={() => toggle("commandTypes", type)}
+              >
+                {humanise(type)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="filter-actions">
+          <span className="filter-count">
+            <strong>{resultCount ?? 0}</strong> streaming of {totalCount ?? 0} matching
+          </span>
+          {clearButton}
+        </div>
+      </div>
+
+      {summary}
+    </div>
   );
 }
 

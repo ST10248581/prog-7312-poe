@@ -278,9 +278,22 @@ Scroll down to **Mesh topology and deployment**.
 Open **http://localhost:5173/commands**. The device simulator starts posting packets
 straight away, so the panels fill within a few seconds.
 
+The page is laid out top to bottom as:
+
+* a compact row of overview tiles;
+* **Suggested Actions & Automated Insights** and **What the engine has learned**,
+  beside the **Telemetry intake** panel;
+* **Live device readings**, with the device filter under its heading;
+* the main section: **Command stream** with the command filter under its heading
+  (then the node timeline and **Dispatch throughput**), beside the **Manual
+  override** console, then **Command history**.
+
+Each filter sits on the list it narrows. The device filter also narrows the
+command stream and history to commands sent to those devices.
+
 **1. Suggested Actions & Automated Insights**
 
-1. Check that **Suggested Actions & Automated Insights** at the top shows cards
+1. Check that **Suggested Actions & Automated Insights** shows cards
    labelled **Predicted**, **Next step** or **Problem device**. Each card gives a
    reason, a confidence and evidence chips. The list can be empty for the first few
    seconds after the API starts.
@@ -293,12 +306,19 @@ straight away, so the panels fill within a few seconds.
 
 **2. Filtering, search, command stream and history**
 
-1. Type a node id such as `PWR-002` into the search box. **Command stream**,
-   **Command history** and **Live device readings** all narrow to that device.
-2. Switch a **Zone** or **Node alert** chip on and off. The **Filtering by** row
-   lists the active filters.
-3. Click a row in **Command stream**. **Manual override** targets that row's node.
-4. Click **Live** so it reads **Paused**. The stream stops updating until you
+1. **Device filter** (on **Live device readings**). Type a node id such as `PWR-002`
+   into the search box. **Live device readings**, **Command stream** and
+   **Command history** all narrow to that device. Then try **All zones**, **Any
+   severity**, and the **Category** and **Node alert** chips, which show how many
+   devices each one selects.
+2. **Command filter** (on **Command stream**). Pick a window (15m, 1h, 6h, 24h) and
+   switch **Status**, **Origin**, **Operation** or **Command** chips, or **Manual
+   only**, on and off. Only the stream, history and throughput change; the device
+   list is unaffected.
+3. Each filter has its own **Filtering by** row of active filters, where **×**
+   removes one, and its own **Clear**, which resets only that filter.
+4. Click a row in **Command stream**. **Manual override** targets that row's node.
+5. Click **Live** so it reads **Paused**. The stream stops updating until you
    resume it.
 
 **3. Message queue and priority queue: the Telemetry intake panel**
@@ -361,7 +381,8 @@ straight away, so the panels fill within a few seconds.
 
 **7. Sorted list: the Node timeline**
 
-1. Click any device card to inspect it. The **Node timeline** panel opens.
+1. Click any device card in **Live device readings**, or any row in **Command
+   stream**, to inspect that node. The **Node timeline** panel opens under the stream.
 2. Read the line under the heading:
    `Range read: skipped X older entries, read Y of Z in N ms · SortedList, O(log n + k)`.
 3. Switch between **5 min**, **15 min**, **1 h** and **3 h**. As the window grows,
@@ -370,8 +391,9 @@ straight away, so the panels fill within a few seconds.
 
 **8. Throughput**
 
-Check the throughput strip. It shows the dispatch rate per minute for the selected
-**Window**, and changes when you pick a different window in the filter bar.
+Check **Dispatch throughput** under the command stream. It shows the dispatch rate per minute for the selected
+time window, and changes when you pick a different window (15m, 1h, 6h, 24h) in
+the command filter.
 
 ## API Reference
 
@@ -451,7 +473,7 @@ The dashboard shows each message under the input it belongs to.
 | **Live refresh** | Stream, history, devices, pipeline, insights and timeline poll every 3 seconds; the **Live** button pauses and resumes them | `CommandsPage.tsx` (`REFRESH_MS`), `usePolling.ts` |
 | **Live command stream** | Newest commands first; selecting a row targets the override console at that node | `CommandStream.tsx` ← `GET /api/commands/stream` |
 | **Command history** | The paged audit trail behind the stream, using the same filter | `CommandHistoryTable.tsx` ← `GET /api/commands` |
-| **Filtering and search** | Narrows the stream, history and devices by free text, device category, operation category, node alert state, status, origin, command type, zone and time window | `CommandFilterBar.tsx` ← `GET /api/commands/filter-options` |
+| **Filtering and search** | Two compact filters, each on the list it narrows. The device filter on **Live device readings** (search, zone, severity, device category, node alert) narrows the devices and the commands sent to them. The command filter on **Command stream** (window, status, origin, operation category, command type, manual only) narrows the stream, history and throughput | `CommandFilterBar.tsx` ← `GET /api/commands/filter-options` |
 | **Manual overrides with undo and redo** | Queues a command against a node (or logs it as a dry run). Undo reverses the most recent live override; redo re-applies the last undone one | `OverrideConsole.tsx` ← `POST /api/commands`, `/api/commands/overrides/*` |
 | **Telemetry intake** | Routine FIFO lane and critical priority lane, with duplicate-alert suppression | `IngestPipeline.tsx` ← `GET /api/commands/pipeline` |
 | **Live devices and instant lookup** | Every matching device with its latest readings and sparklines, worst first. Instant lookup finds one device by node id or MAC address and shows the probe time | `LiveDevicePanel.tsx` ← `GET /api/commands/devices`, `/api/commands/devices/lookup` |
@@ -848,8 +870,9 @@ conditions from the start. Every search, node selection and override on the page
 feeds back in.
 
 **Presentation.** The **Suggested Actions & Automated Insights** panel
-(`SuggestedActions.tsx`) sits at the top of the `/commands` page, above the filter,
-so recommendations are visible before the operator searches. Each card shows:
+(`SuggestedActions.tsx`) sits near the top of the `/commands` page, above the
+device and command lists, so recommendations are visible before the operator
+searches. Each card shows:
 
 * its type: **Predicted** (a learned rule), **Next step** (the Markov chain)
   or **Problem device** (anomaly scoring);

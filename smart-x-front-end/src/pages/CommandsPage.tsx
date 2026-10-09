@@ -581,8 +581,9 @@ function CommandsPage() {
         </div>
       )}
 
-      {/* Overview: dispatch health before any individual command. */}
-      <section className="stat-row" aria-label="Command overview">
+      {/* Overview: dispatch health before any individual command, kept to one
+          compact row so the stream stays near the top. */}
+      <section className="stat-row stat-row-compact" aria-label="Command overview">
         <StatTile
           label="Dispatch rate"
           value={summary ? summary.dispatchRate.toFixed(1) : "—"}
@@ -664,18 +665,9 @@ function CommandsPage() {
         </StatTile>
       </section>
 
-      {/* Visualises the incoming stream as a rate, so a burst or a stall is
-          visible without reading individual rows. */}
-      <section className="throughput-panel" aria-label="Dispatch throughput">
-        <header className="panel-head">
-          <h2>Dispatch throughput</h2>
-          <span className="panel-head-count">commands per minute</span>
-        </header>
-        <ThroughputStrip values={summary?.throughput ?? []} windowLabel={windowLabel} />
-      </section>
-
-      {/* Predict → act: the engine's suggestions sit above the filter, so the
-          next move is on screen before the operator has to search for it. */}
+      {/* Predict → act: the engine's suggestions and the intake sit together,
+          ahead of the lists, so the next move is on screen before the operator
+          has to search for it. */}
       <div className="insights-grid">
         <div className="insights-main">
           <SuggestedActions
@@ -698,28 +690,28 @@ function CommandsPage() {
         />
       </div>
 
-      <CommandFilterBar
-        options={options}
-        filters={filters}
-        resultCount={stream.length}
-        totalCount={totalCount}
-        categoryCounts={summary?.categoryCounts}
-        deviceCounts={
-          devices
-            ? { categories: devices.categoryCounts, alertStates: devices.alertStateCounts }
-            : undefined
-        }
-        onChange={handleFilterChange}
-      />
-
-      {/* Watch: the incoming sensor data itself, every matching device with its
-          latest readings, before the commands sent to them. */}
+      {/* Watch: the incoming sensor data itself. The device filter lives on
+          this panel because it describes devices; it also narrows the
+          commands below to the traffic sent to these devices. */}
       <LiveDevicePanel
         result={devices}
         error={devicesError}
         selectedNode={targetNode}
         filtered={hasActiveFilters(filters)}
         onInspect={focusNode}
+        filters={
+          <CommandFilterBar
+            scope="device"
+            options={options}
+            filters={filters}
+            deviceCounts={
+              devices
+                ? { categories: devices.categoryCounts, alertStates: devices.alertStateCounts }
+                : undefined
+            }
+            onChange={handleFilterChange}
+          />
+        }
       />
 
       {/* Scroll target for "Edit first" on a suggestion. A sibling rather than a
@@ -728,12 +720,25 @@ function CommandsPage() {
 
       <div className="commands-grid">
         <div className="commands-main">
+          {/* The command filter sits on the stream: status, origin, operation,
+              command type and window only narrow commands. */}
           <CommandStream
             commands={stream}
             selectedId={selectedId}
             live={live}
             loading={loading}
             onSelect={handleSelect}
+            filters={
+              <CommandFilterBar
+                scope="command"
+                options={options}
+                filters={filters}
+                resultCount={stream.length}
+                totalCount={totalCount}
+                categoryCounts={summary?.categoryCounts}
+                onChange={handleFilterChange}
+              />
+            }
           />
 
           {targetNode && (
@@ -745,6 +750,16 @@ function CommandsPage() {
               onWindowChange={setTimelineMinutes}
             />
           )}
+
+          {/* Visualises the stream as a rate over the command window, so a
+              burst or a stall is visible without reading individual rows. */}
+          <section className="throughput-panel" aria-label="Dispatch throughput">
+            <header className="panel-head">
+              <h2>Dispatch throughput</h2>
+              <span className="panel-head-count">commands per minute</span>
+            </header>
+            <ThroughputStrip values={summary?.throughput ?? []} windowLabel={windowLabel} />
+          </section>
         </div>
 
         <OverrideConsole

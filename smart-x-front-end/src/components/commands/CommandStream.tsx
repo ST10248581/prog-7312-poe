@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { formatRelative, formatTime, humanise } from "../../utils/format";
 import NodeAlertBadge from "./NodeAlertBadge";
 import type { CommandRecord } from "./types";
@@ -9,6 +10,8 @@ interface CommandStreamProps {
   /** First paint only; refreshes swap rows in place rather than emptying the list. */
   loading: boolean;
   onSelect: (command: CommandRecord) => void;
+  /** The command filter, shown under the heading: it narrows only this list and the history. */
+  filters?: ReactNode;
 }
 
 /**
@@ -22,6 +25,7 @@ function CommandStream({
   live,
   loading,
   onSelect,
+  filters,
 }: CommandStreamProps) {
   return (
     <section className="command-stream-panel" aria-label="Live command stream">
@@ -36,6 +40,8 @@ function CommandStream({
           </span>
         </div>
       </header>
+
+      {filters}
 
       {commands.length === 0 ? (
         <p className="panel-empty">

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { lookupDevice, recordActivity } from "../../services/apiService";
 import type { DeviceLookupResult } from "../../services/apiService";
 import Sparkline from "../telemetry/Sparkline";
@@ -17,6 +17,8 @@ interface LiveDevicePanelProps {
   /** True when a filter narrows the list, so an empty result can say why. */
   filtered: boolean;
   onInspect: (nodeId: string) => void;
+  /** The device filter, shown under the heading: it narrows this list and the commands sent to these devices. */
+  filters?: ReactNode;
 }
 
 /**
@@ -29,7 +31,7 @@ interface LiveDevicePanelProps {
  * worst-first — this panel only lays it out. Selecting a card aims the override
  * console and the timeline at that device.
  */
-function LiveDevicePanel({ result, error, selectedNode, filtered, onInspect }: LiveDevicePanelProps) {
+function LiveDevicePanel({ result, error, selectedNode, filtered, onInspect, filters }: LiveDevicePanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [lookupKey, setLookupKey] = useState("");
   const [lookup, setLookup] = useState<DeviceLookupResult | null>(null);
@@ -75,6 +77,8 @@ function LiveDevicePanel({ result, error, selectedNode, filtered, onInspect }: L
             : "loading…"}
         </span>
       </header>
+
+      {filters}
 
       <form className="device-lookup" onSubmit={handleLookup} role="search">
         <label className="device-lookup-label" htmlFor="device-lookup-key">
