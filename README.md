@@ -730,6 +730,202 @@ dotnet test
   redo.
 * **RingBuffer.** Overwrite order, tail reads, and the modification check.
 
+### How to test the queues and dictionaries on Page 2
+
+There are three ways to check the Part 2 structures: run the automated tests, use
+the `/commands` page, or call the API directly. Each one tests the same engine
+(`SmartXCommandEngine`).
+
+#### 1. Automated tests
+
+Stop the API first if it is running. A running `SmartX.Api` locks its build output,
+and the test build then fails to copy it.
+
+```bash
+cd smart-x-backend/SmartX.Api.Tests
+
+dotnet test                                              # all 14 tests
+dotnet test --filter "FullyQualifiedName~IntakeQueueTests"   # queues, priority queue, dictionaries, sets (6)
+dotnet test --filter "FullyQualifiedName~UndoRedoTests"      # undo / redo stacks (5)
+dotnet test --filter "FullyQualifiedName~RingBufferTests"    # RingBuffer<T> (3)
+```
+
+Expected result: `Passed!  - Failed: 0`.
+
+| Test | Structure it proves |
+| --- | --- |
+| `Critical_packet_is_processed_before_standard_packets_that_arrived_first` | `PriorityQueue` critical lane overtakes the FIFO `Queue` |
+| `Critical_lane_serves_the_largest_breach_first_even_if_it_arrived_last` | Priority ordering inside the critical lane |
+| `Standard_queue_sheds_oldest_packets_past_its_capacity` | Bounded `Queue` with backpressure |
+| `Repeat_disconnect_is_suppressed_and_counted_against_the_node` | `HashSet` duplicate suppression |
+| `Set_difference_reports_nodes_newly_disconnected_since_the_last_poll` | `ExceptWith` / `IntersectWith` |
+| `Device_lookup_finds_a_mac_address_in_any_notation` | MAC-keyed `Dictionary` with canonical keys |
+| `Undo_*` / `Redo_*` / `A_new_override_clears_the_redo_stack` | Undo and redo `Stack`s, idempotency |
+
+#### 2. Manual walkthrough in the browser
+
+Start the backend and the frontend (see [Getting Started](#getting-started)), then
+open **http://localhost:5173/commands**. The device simulator starts posting packets
+straight away, so the panels fill within a few seconds.
+
+Seeded node ids follow the category order: `ENV-001`, `PWR-002`, `ACT-003`,
+`MOT-004`, `NET-005`, `ENV-006`, … (40 nodes).
+
+**Message queue and priority queue: the Telemetry intake panel**
+
+1. Find the **Telemetry intake** panel. Note the **Standard queue · FIFO** depth
+   (out of 1 000) and the **Critical lane · priority** processed count.
+2. Click **Simulate power spike**. It posts 20 routine Power packets and then one
+   12 kW spike for a PWR/ACT/NET node.
+3. Check the result line under the buttons. It should read
+   `20 routine packets queued; 1 critical processed immediately, overtaking N queued packets (waited ~0–5 ms).`
+   The spike was posted *last* but was processed *first*: that is the priority
+   queue bypassing the FIFO queue.
+4. Watch the standard queue depth fall over the next few seconds. It drains at
+   20 packets per 2-second tick, in arrival order.
+5. Click **Flood standard lane**. It posts 1 200 routine packets, more than the
+   queue holds. The result line reports `… oldest shed by backpressure`, and the
+   **shed by backpressure** counter goes up. The spike in the same batch is still
+   processed immediately, because the critical lane is never shed.
+
+**Undo and redo stacks: the Manual override console**
+
+1. In **Manual override**, choose a target node that is online (for example
+   `PWR-002`), the command **Set Threshold** and parameters such as `power.max=5`.
+2. **Untick "Dry run".** Dry runs are logged but never stacked, so they cannot be
+   undone.
+3. Tick **I have checked the target node and parameters**, then click
+   **Queue override**. The **Undo history** count goes up by one, and the panel
+   says what undo will do (for example "Undo will restore power.max to 5.7kW").
+4. Click **↶ Undo**. If the command was still queued it is cancelled; if it had
+   already been sent, the inverse is sent at Immediate priority. The **↷ Redo (1)**
+   button is now enabled.
+5. Click **↷ Redo**. The same command is re-sent and goes back onto the undo stack.
+6. Queue a new override, then confirm that **Redo** is disabled again. A new
+   override clears the redo stack.
+
+**Dictionaries: Instant lookup on the Live device readings panel**
+
+1. In **Live device readings**, type `ENV-001` into **Instant lookup** and click
+   **Find**. The result reads `Found ENV-001 via the node ID dictionary in 0.00xx ms`
+   with `one hash probe, 40 entries`.
+2. Hover over the ENV-001 device card to see its MAC address (for example
+   `5C:A1:40:78:7F:18`). Type it in lower case with dashes (`5c-a1-40-78-7f-18`) and
+   click **Find**. It is found **via the MAC address dictionary**, and the key shown
+   is the canonical `5C:A1:40:78:7F:18`. Both notations reach the same entry.
+3. Look up a key that does not exist, such as `NOPE-999`. The page reports
+   `No device is registered under NOPE-999` in a similar time. A miss costs one hash
+   probe too.
+
+**Sorted list (sorted dictionary): the Node timeline**
+
+1. Click any device card (or an error-state chip in the intake panel) to inspect
+   that node. The **Node timeline** panel opens for it.
+2. Read the line under the heading:
+   `Range read: skipped X older entries, read Y of Z in N ms · SortedList, O(log n + k)`.
+   The binary search skipped X entries without reading them.
+3. Switch between **5 min**, **15 min**, **1 h** and **3 h**. "read Y" grows with the
+   window and "skipped X" shrinks, while the log size Z stays the same. The events
+   are always drawn in timestamp order.
+
+**Dictionary of bounded queues: latest readings**
+
+Each device card in **Live device readings** shows its latest values and a
+sparkline. These come from `_recentReadings`, one hash probe per node and metric
+into a queue capped at the last 24 values. The sparklines advance every few
+seconds as the simulator posts packets.
+
+#### 3. Calling the API directly
+
+These commands use `curl` in Git Bash, macOS or Linux. In Windows PowerShell, `curl`
+is an alias for `Invoke-WebRequest`, so run them from Git Bash instead. The API must
+be running on port 5127.
+
+**Priority queue overtaking the FIFO queue.** Two routine packets and one spike, with
+the spike sent last:
+
+```bash
+curl -s -X POST http://localhost:5127/api/commands/packets \
+  -H "Content-Type: application/json" \
+  -d '[{"nodeId":"PWR-002","readingType":"Power","value":1.8},
+       {"nodeId":"PWR-002","readingType":"Power","value":2.1},
+       {"nodeId":"PWR-002","readingType":"Power","value":12}]'
+```
+
+Expect `"queuedStandard":2`, `"processedCritical":1`, a `bypassedStandard` count, and a
+`criticalAlerts` entry with `"lane":"Critical"` and a `queueWaitMs` of a few
+milliseconds.
+
+**Queue depths and counters:**
+
+```bash
+curl -s http://localhost:5127/api/commands/pipeline
+```
+
+Check `standardQueueDepth`, `standardQueueCapacity` (1000), `standardBudgetPerTick`
+(20), `bypassedStandard`, `dropped` and `duplicatesSuppressed`.
+
+**Dictionary lookups by node id, by MAC in any notation, and a miss:**
+
+```bash
+curl -s "http://localhost:5127/api/commands/devices/lookup?key=ENV-001"
+curl -s "http://localhost:5127/api/commands/devices/lookup?key=5c-a1-40-78-7f-18"   # use the macAddress from the first call
+curl -s "http://localhost:5127/api/commands/devices/lookup?key=NOPE-999"
+```
+
+Expect `"matchedBy":"NodeId"`, then `"matchedBy":"MacAddress"` with
+`"normalisedKey":"5C:A1:40:78:7F:18"`, then `"found":false`. Each response includes
+`elapsedMicroseconds` (single-digit microseconds once warm) and `registrySize`.
+
+**Sorted-list range read:**
+
+```bash
+curl -s "http://localhost:5127/api/commands/nodes/ENV-001/timeline?minutes=15"
+curl -s "http://localhost:5127/api/commands/nodes/ENV-001/timeline?minutes=180"
+```
+
+Compare `logSize`, `entriesSkipped`, `entriesInWindow` and `rangeReadMicroseconds`
+between the two windows.
+
+**Undo / redo stacks and idempotency.** Use an online node. A live dispatch to a
+disconnected node is rejected with "is offline and cannot accept a dispatch".
+
+```bash
+# 1. Queue a live override and note the "id" in the response
+curl -s -X POST http://localhost:5127/api/commands -H "Content-Type: application/json" \
+  -d '{"nodeId":"PWR-002","commandType":"SetThreshold","parameters":"power.max=5","priority":"Normal","dryRun":false}'
+
+# 2. Inspect the stacks
+curl -s http://localhost:5127/api/commands/overrides
+
+# 3. Undo it (replace <id>). The outcome is "Cancelled" if it was still queued, otherwise "Reverted"
+curl -s -X POST http://localhost:5127/api/commands/overrides/undo -H "Content-Type: application/json" \
+  -d '{"expectedCommandId":"<id>"}'
+
+# 4. Send the same undo again. The outcome is "AlreadyUndone" and nothing else changes
+curl -s -X POST http://localhost:5127/api/commands/overrides/undo -H "Content-Type: application/json" \
+  -d '{"expectedCommandId":"<id>"}'
+
+# 5. Redo it. The outcome is "Redone", and the command is back on the undo stack
+curl -s -X POST http://localhost:5127/api/commands/overrides/redo -H "Content-Type: application/json" \
+  -d '{"expectedCommandId":"<id>"}'
+```
+
+**Duplicate disconnect suppression (HashSet).** This takes the node off the mesh,
+so use a node you do not need for the tests above. If the simulator has already
+disconnected `MOT-004` (it is listed under `disconnectedNodes` in the pipeline
+response), pick another node, or the first call will be suppressed too:
+
+```bash
+curl -s -X POST http://localhost:5127/api/commands/packets -H "Content-Type: application/json" \
+  -d '[{"nodeId":"MOT-004","linkUp":false}]'   # first loss: "processedCritical":1
+curl -s -X POST http://localhost:5127/api/commands/packets -H "Content-Type: application/json" \
+  -d '[{"nodeId":"MOT-004","linkUp":false}]'   # repeat:     "suppressedDuplicates":1
+```
+
+All runtime state is in memory, so restarting the API resets the queues, stacks and
+dictionaries to the seeded state.
+
 ## Code Attributions and Reference List
 
 The advanced object-oriented C# concepts (Part 1) and the data structures and
