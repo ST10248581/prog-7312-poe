@@ -18,6 +18,7 @@ const navItems = [
   { label: "Overview", path: "/", end: true },
   { label: "Sensor Data Ingestion and Telemetry", path: "/telemetry", end: false },
   { label: "Real-Time Command Stream and History", path: "/commands", end: false },
+  { label: "Network Topology and Mesh Routing", path: "/topology", end: false },
 ];
 
 function Navbar() {

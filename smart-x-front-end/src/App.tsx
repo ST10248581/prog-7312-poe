@@ -8,6 +8,7 @@ import AppStateProvider from "./state/AppStateProvider";
 import HomePage from "./pages/HomePage";
 import TelemetryPage from "./pages/TelemetryPage";
 import CommandsPage from "./pages/CommandsPage";
+import TopologyPage from "./pages/TopologyPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import "./App.css";
 
@@ -42,6 +43,7 @@ function App() {
               <Route path="/" element={<Guarded name="Overview"><HomePage /></Guarded>} />
               <Route path="/telemetry" element={<Guarded name="Telemetry"><TelemetryPage /></Guarded>} />
               <Route path="/commands" element={<Guarded name="Command Stream"><CommandsPage /></Guarded>} />
+              <Route path="/topology" element={<Guarded name="Network Topology"><TopologyPage /></Guarded>} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </main>

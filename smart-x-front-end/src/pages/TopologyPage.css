@@ -1,0 +1,271 @@
+/* ============================================================
+   Network Topology and Mesh Routing
+   Layout follows visualise -> trace -> review history.
+
+   Shared widgets (stat tiles, filter chips, .panel-head, .data-table,
+   .register-btn) come from TelemetryPage.css; only topology-specific
+   rules live here. Breakpoints live in styles/responsive.css.
+   ============================================================ */
+
+.topology-page {
+  padding: var(--page-gutter);
+  display: flex;
+  flex-direction: column;
+  gap: var(--page-gap);
+  max-width: var(--page-max);
+  width: 100%;
+  margin: 0 auto;
+}
+
+.topology-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--sidebar-width);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.topology-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+/* ---------- Inputs ---------- */
+
+.topology-input {
+  padding: 0.4rem 0.625rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  min-width: 0;
+}
+
+.topology-input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
+.topology-input::placeholder { color: var(--text-muted); }
+.topology-input:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.topology-icon-btn {
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.topology-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Graph ---------- */
+
+.topology-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.topology-toolbar .topology-input { flex: 1; max-width: 320px; }
+
+.topology-zoom {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.topology-canvas {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  min-height: 280px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-light);
+  background:
+    radial-gradient(circle at 50% 50%, rgb(var(--accent-rgb) / 0.06), transparent 60%),
+    var(--bg-primary);
+  overflow: hidden;
+}
+
+.topology-canvas svg {
+  width: 100%;
+  height: 100%;
+}
+
+.topology-canvas-note {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-2);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.topology-link {
+  stroke: var(--border-light);
+  stroke-width: 0.4;
+}
+
+.topology-node circle {
+  fill: var(--bg-surface);
+  stroke: var(--accent);
+  stroke-width: 0.6;
+}
+
+.topology-node text {
+  fill: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 3px;
+  text-anchor: middle;
+}
+
+.topology-node-gateway circle { fill: var(--accent-dim); stroke: var(--accent-2); stroke-width: 0.9; }
+.topology-node-offline circle { stroke: var(--danger); stroke-dasharray: 1 0.8; }
+
+.topology-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-3);
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.topology-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+}
+
+.legend-gateway { border-color: var(--accent-2); background: var(--accent-dim); }
+.legend-offline { border-color: var(--danger); border-style: dashed; }
+
+.legend-line {
+  width: 18px;
+  height: 2px;
+  background: var(--border-light);
+}
+
+.legend-line-route { background: var(--accent); }
+
+/* ---------- Route tracker ---------- */
+
+.route-panel {
+  position: sticky;
+  top: calc(var(--nav-height) + var(--space-4));
+}
+
+.route-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.route-label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.route-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.route-facts dt {
+  font-size: 0.625rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.route-facts dd {
+  font-family: var(--mono);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.route-hops {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.route-hop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.route-hop-index {
+  display: inline-grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.route-hop-name {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.route-hop-meta {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+/* ---------- Telemetry history ---------- */
+
+.history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.history-scroll {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.history-placeholder-row td { color: var(--text-muted); }
+
+.history-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-3);
+}

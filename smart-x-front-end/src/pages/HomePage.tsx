@@ -170,6 +170,30 @@ function HomePage() {
                 : "Open command stream →"}
           </span>
         </Link>
+
+        <Link to="/topology" className="home-pillar">
+          <span className="home-pillar-tag">Module 3</span>
+          <h2>Network Topology and Mesh Routing</h2>
+          <p>
+            See the live mesh as a graph, trace any node&apos;s route back to the gateway by
+            its MAC address, and review a sensor&apos;s telemetry history.
+          </p>
+          <dl className="home-pillar-stats">
+            <div>
+              <dt>Nodes</dt>
+              <dd>—</dd>
+            </div>
+            <div>
+              <dt>Links</dt>
+              <dd>—</dd>
+            </div>
+            <div>
+              <dt>Avg hops</dt>
+              <dd>—</dd>
+            </div>
+          </dl>
+          <span className="home-pillar-resume">Open topology →</span>
+        </Link>
       </div>
     </div>
   );
