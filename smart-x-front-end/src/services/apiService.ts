@@ -1303,7 +1303,264 @@ export async function resetLearning(): Promise<void> {
   }
 }
 
+/* ---------- Network Topology and Mesh Routing ---------- */
+
+export type MeshNodeKind = "Gateway" | "Sensor";
+export type MeshNodeState = "Online" | "Degraded" | "Offline" | "Isolated";
+export type OfflineReason = "None" | "LinkLost" | "Deactivated" | "SimulatedOutage";
+export type MeshLinkKind = "Radio" | "GatewayUplink";
+export type HistorySort = "Newest" | "Oldest";
+export type HistoryEntryStatus = "Normal" | "Breach" | "Suspect" | "Bad";
+export type HistorySource = "Archive" | "Live";
+
+export interface MeshNode {
+  id: string;
+  sensorProfileId: string | null;
+  name: string;
+  macAddress: string;
+  kind: MeshNodeKind;
+  category: SensorCategory | null;
+  zone: string;
+  room: string;
+  x: number;
+  y: number;
+  state: MeshNodeState;
+  offlineReason: OfflineReason;
+  isSimulatedFailure: boolean;
+  degree: number;
+  hops: number | null;
+  pathCost: number | null;
+  gatewayId: string | null;
+  nextHop: string | null;
+  dependants: number;
+  isRerouted: boolean;
+}
+
+export interface MeshLink {
+  id: string;
+  from: string;
+  to: string;
+  kind: MeshLinkKind;
+  distanceMetres: number;
+  rssiDbm: number;
+  deliveryRatio: number;
+  cost: number;
+  latencyMs: number;
+  isActive: boolean;
+  inMst: boolean;
+  inRoutingTree: boolean;
+}
+
+export interface TopologySummary {
+  sensorNodes: number;
+  activeNodes: number;
+  degradedNodes: number;
+  offlineNodes: number;
+  isolatedNodes: number;
+  reroutedNodes: number;
+  gateways: number;
+  onlineGateways: number;
+  totalLinks: number;
+  activeLinks: number;
+  averageHops: number;
+  maxHops: number;
+  mstEdgeCount: number;
+  mstTotalCost: number;
+  activeMeshCost: number;
+  redundantLinks: number;
+  dijkstraMicroseconds: number;
+  primMicroseconds: number;
+  routeVersion: number;
+  lastRecomputedUtc: string;
+}
+
+export interface CriticalRelay {
+  nodeId: string;
+  name: string;
+  zone: string;
+  dependants: number;
+}
+
+export interface MeshTopology {
+  nodes: MeshNode[];
+  links: MeshLink[];
+  summary: TopologySummary;
+  criticalRelays: CriticalRelay[];
+  zones: string[];
+  generatedUtc: string;
+}
+
+export interface RouteHop {
+  index: number;
+  nodeId: string;
+  name: string;
+  macAddress: string;
+  kind: MeshNodeKind;
+  state: MeshNodeState;
+  linkCost: number | null;
+  linkLatencyMs: number | null;
+  linkRssiDbm: number | null;
+  cumulativeCost: number;
+}
+
+export interface RoutePath {
+  hops: RouteHop[];
+  hopCount: number;
+  totalCost: number;
+  totalLatencyMs: number;
+  gatewayId: string;
+  linkIds: string[];
+}
+
+export interface RouteTrace {
+  key: string;
+  normalisedKey: string;
+  found: boolean;
+  matchedBy: "NodeId" | "MacAddress" | null;
+  node: MeshNode | null;
+  reachable: boolean;
+  message: string;
+  primary: RoutePath | null;
+  designed: RoutePath | null;
+  backup: RoutePath | null;
+  spanning: RoutePath | null;
+  isRerouted: boolean;
+  backupSearchMicroseconds: number;
+  generatedUtc: string;
+}
+
+export interface NodeFailureResult {
+  nodeId: string;
+  isSimulatedFailure: boolean;
+  affectedNodes: number;
+  healedNodes: number;
+  isolatedNodes: string[];
+  changedRoutes: string[];
+  message: string;
+  topology: MeshTopology;
+}
+
+export interface TelemetryHistoryEntry {
+  timestampUtc: string;
+  readingType: ReadingType;
+  value: number;
+  unit: string;
+  status: HistoryEntryStatus;
+  source: HistorySource;
+  routeHops: number | null;
+  routeGatewayId: string | null;
+}
+
+export interface HistoryMetricSummary {
+  readingType: ReadingType;
+  unit: string;
+  count: number;
+  min: number;
+  max: number;
+  average: number;
+  breaches: number;
+}
+
+export interface RouteChange {
+  timestampUtc: string;
+  hopsBefore: number | null;
+  hopsAfter: number | null;
+  gatewayAfter: string | null;
+  description: string;
+}
+
+export interface TelemetryHistory {
+  nodeId: string;
+  sensorProfileId: string;
+  sensorName: string;
+  macAddress: string;
+  zone: string;
+  hours: number;
+  fromUtc: string;
+  toUtc: string;
+  sort: HistorySort;
+  readingType: ReadingType | null;
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  items: TelemetryHistoryEntry[];
+  metrics: HistoryMetricSummary[];
+  routeChanges: RouteChange[];
+  availableReadingTypes: ReadingType[];
+  windowReadMicroseconds: number;
+}
+
+export interface HistoryQuery {
+  hours?: number;
+  sort?: HistorySort;
+  readingType?: ReadingType | null;
+  page?: number;
+  pageSize?: number;
+}
+
+/** The live mesh: nodes, weighted links, the spanning tree and the routing tree. */
+export async function getTopology(signal?: AbortSignal): Promise<MeshTopology> {
+  const response = await apiFetch(`${API_BASE_URL}/topology`, { signal });
+  return handleResponse<MeshTopology>(response);
+}
+
+/** Rebuilds the graph from the registry and recomputes every route. */
+export async function recomputeTopology(): Promise<MeshTopology> {
+  const response = await apiFetch(`${API_BASE_URL}/topology/recompute`, { method: "POST" });
+  return handleResponse<MeshTopology>(response);
+}
+
+/** Traces a node's route to the gateway by MAC address (any notation) or node id. */
+export async function traceRoute(key: string, signal?: AbortSignal): Promise<RouteTrace> {
+  const query = buildQuery({ key });
+  const response = await apiFetch(`${API_BASE_URL}/topology/routes${query}`, { signal });
+  // A miss is a 404 that still carries the trace (with its normalised key), so read it either way.
+  if (response.status === 404) {
+    return (await response.json()) as RouteTrace;
+  }
+  return handleResponse<RouteTrace>(response);
+}
+
+/** Takes a node off the mesh (or brings it back) to watch the routes heal. */
+export async function setNodeFailure(key: string, failed: boolean): Promise<NodeFailureResult> {
+  const action = failed ? "fail" : "restore";
+  const response = await apiFetch(`${API_BASE_URL}/topology/nodes/${encodeURIComponent(key)}/${action}`, {
+    method: "POST",
+  });
+  return handleResponse<NodeFailureResult>(response);
+}
+
+export async function clearNodeFailures(): Promise<MeshTopology> {
+  const response = await apiFetch(`${API_BASE_URL}/topology/failures/clear`, { method: "POST" });
+  return handleResponse<MeshTopology>(response);
+}
+
+/** One sensor's telemetry, ordered and paged server-side, with the route each reading took. */
+export async function getTelemetryHistory(
+  key: string,
+  query: HistoryQuery = {},
+  signal?: AbortSignal
+): Promise<TelemetryHistory> {
+  const search = buildQuery({
+    key,
+    hours: query.hours,
+    sort: query.sort,
+    readingType: query.readingType ?? undefined,
+    page: query.page,
+    pageSize: query.pageSize,
+  });
+  const response = await apiFetch(`${API_BASE_URL}/topology/history${search}`, { signal });
+  return handleResponse<TelemetryHistory>(response);
+}
+
 export default {
+  getTopology,
+  recomputeTopology,
+  traceRoute,
+  setNodeFailure,
+  clearNodeFailures,
+  getTelemetryHistory,
   testConnection,
   getSummary,
   getSensors,

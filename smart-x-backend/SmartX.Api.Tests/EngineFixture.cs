@@ -32,6 +32,28 @@ internal static class EngineFixture
         return new SmartXCommandEngine(store, options);
     }
 
+    /// <summary>A topology engine over the same kind of store, reading link state from its own command engine.</summary>
+    public static (SmartXTopologyEngine Topology, SmartXCommandEngine Commands, SmartXDataStore Store) CreateTopology()
+    {
+        var options = new SeedOptions
+        {
+            SensorCount = 40,
+            HistoryDays = 1,
+            CommandHistoryHours = 2
+        };
+
+        var store = new SmartXDataStore();
+        new SensorProfileSeeder(store, options).Seed();
+        new SensorThresholdSeeder(store, options).Seed();
+        new TelemetryReadingSeeder(store, options).Seed();
+        new AlertSeeder(store, options).Seed();
+        new CommandSeeder(store, options).Seed();
+        store.RebuildIndexes();
+
+        var commands = new SmartXCommandEngine(store, options);
+        return (new SmartXTopologyEngine(store, options, commands), commands, store);
+    }
+
     /// <summary>Reachable devices, optionally only those whose hardware accepts a command.</summary>
     public static List<LiveDevice> ReachableDevices(SmartXCommandEngine engine, CommandType? supporting = null) =>
         engine.GetLiveDevices(new DeviceQuery()).Items

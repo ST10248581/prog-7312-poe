@@ -2186,6 +2186,42 @@ public class SmartXCommandEngine : ISmartXCommandEngine
         return result;
     }
 
+    public IReadOnlyCollection<string> GetDisconnectedNodeIds()
+    {
+        lock (_sync)
+        {
+            EnsureReady();
+            return _disconnectedNodes.ToArray();
+        }
+    }
+
+    /// <summary>
+    /// The same O(log n + k) range read as <see cref="GetNodeTimeline"/>, but
+    /// without down-sampling, for the topology page's telemetry history.
+    /// </summary>
+    public IReadOnlyList<SensorLogEntry> GetSensorLog(string nodeId, DateTime fromUtc)
+    {
+        lock (_sync)
+        {
+            EnsureReady();
+
+            if (!_sensorLogs.TryGetValue(nodeId.Trim(), out var log))
+            {
+                return Array.Empty<SensorLogEntry>();
+            }
+
+            var start = LowerBound(log, fromUtc);
+            var values = log.Values;
+            var entries = new List<SensorLogEntry>(log.Count - start);
+            for (var index = start; index < values.Count; index++)
+            {
+                entries.Add(values[index]);
+            }
+
+            return entries;
+        }
+    }
+
     /// <summary>One device's live card: latest value and trail per metric. Caller holds the lock.</summary>
     private LiveDevice BuildLiveDevice(SensorProfile device)
     {

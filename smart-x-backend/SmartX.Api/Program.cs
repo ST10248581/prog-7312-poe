@@ -62,6 +62,12 @@ builder.Services.AddScoped<IEngagementRepository, EngagementRepository>();
 builder.Services.AddSingleton<SmartXCommandEngine>();
 builder.Services.AddSingleton<ISmartXCommandEngine>(provider => provider.GetRequiredService<SmartXCommandEngine>());
 
+// The topology page's engine is a singleton for the same reason: the mesh
+// graph, route history and simulated failures are live state. It reads which
+// nodes are down from the command engine, so the two pages agree.
+builder.Services.AddSingleton<SmartXTopologyEngine>();
+builder.Services.AddSingleton<ISmartXTopologyEngine>(provider => provider.GetRequiredService<SmartXTopologyEngine>());
+
 // One central service backs every domain interface, so the controllers keep
 // depending on a narrow contract while the logic itself lives in one class.
 builder.Services.AddScoped<SmartXTelemetryEngine>();
@@ -91,6 +97,10 @@ builder.Services.AddSingleton<IDataSeeder, DataSeeder>();
 // in-flight commands, so the dashboard shows live dispatch rather than a
 // frozen log.
 builder.Services.AddHostedService<CommandDispatchSimulator>();
+
+// Re-routes the mesh as nodes drop off and come back, so a route change is
+// recorded when it happens rather than when the topology page is next opened.
+builder.Services.AddHostedService<TopologyMonitor>();
 
 // Emulated devices. They post telemetry to POST /api/commands/packets over
 // HTTP, so simulated traffic reaches the intake exactly as a device's would.

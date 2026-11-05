@@ -50,6 +50,17 @@ public interface ISmartXCommandEngine
     /// <summary>Exact O(1) lookup by node id or MAC address, timed.</summary>
     DeviceLookupResult LookupDevice(string key);
 
+    /* ---------- Shared with the topology engine ---------- */
+
+    /// <summary>A copy of the disconnected-node set, so the mesh router can route around lost links.</summary>
+    IReadOnlyCollection<string> GetDisconnectedNodeIds();
+
+    /// <summary>
+    /// A node's raw sorted-log entries from <paramref name="fromUtc"/> on, oldest
+    /// first, found by binary search. Empty when the node has no log.
+    /// </summary>
+    IReadOnlyList<SensorLogEntry> GetSensorLog(string nodeId, DateTime fromUtc);
+
     /* ---------- Device emulation ---------- */
 
     /// <summary>

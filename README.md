@@ -176,6 +176,7 @@ never leaves the UI hanging.
 | `/` | `HomePage` | Overview — mesh health, live counts, and where each module resumes |
 | `/telemetry` | `TelemetryPage` | Page 1 — Sensor Data Ingestion and Telemetry: overview tiles, filters, sensor detail, registration, attachments, mesh topology |
 | `/commands` | `CommandsPage` | Page 2 — Real-Time Command Stream and History: command stream, manual overrides with undo/redo, telemetry intake, device lookup, node timeline, Suggested Actions & Automated Insights |
+| `/topology` | `TopologyPage` | Page 3 — Network Topology and Mesh Routing: mesh graph (full mesh / MST / traced route), route tracker by MAC or node id, simulated failures and self-healing, telemetry history |
 | `*` | `NotFoundPage` | 404 with links back to each module |
 
 ## Manual Testing
@@ -447,6 +448,13 @@ The dashboard shows each message under the input it belongs to.
 | `POST` | `/api/commands/insights/feedback` | Record that a suggestion was applied or dismissed (re-ranks it) |
 | `POST` | `/api/commands/insights/reset` | Clear everything the recommendation engine has learned |
 | `POST` | `/api/commands/activity` | Record a search or node selection for the action engine |
+| `GET` | `/api/topology` | The live mesh: nodes, weighted links, MST and routing-tree membership, summary, critical relays |
+| `POST` | `/api/topology/recompute` | Rebuild the graph from the registry and recompute every route |
+| `GET` | `/api/topology/routes?key=` | Trace a node's route to the gateway by MAC address or node id — 200, 400, 404 |
+| `POST` | `/api/topology/nodes/{key}/fail` | Simulate a node failure and report which dependants healed |
+| `POST` | `/api/topology/nodes/{key}/restore` | Bring a simulated failure back online |
+| `POST` | `/api/topology/failures/clear` | Clear every simulated outage |
+| `GET` | `/api/topology/history?key=` | A sensor's telemetry history, ordered and paged, with the route each reading took |
 
 ## Key Features
 
@@ -945,7 +953,7 @@ simulator raises the first breach or disconnection.
 
 ### Tests
 
-`smart-x-backend/SmartX.Api.Tests` is an xUnit project (14 tests) that runs the real
+`smart-x-backend/SmartX.Api.Tests` is an xUnit project (22 tests) that runs the real
 engine over a freshly seeded store:
 
 ```bash
@@ -963,10 +971,61 @@ dotnet test
   redo.
 * **RingBuffer.** Overwrite order, tail reads, and the modification check.
 
+* **Binary heap.** 500 random priorities come out sorted; equal priorities leave in
+  insertion order.
+* **Topology.** Every routed node's next-hop chain ends at its gateway over active
+  links. Prim's MST total matches an independent Kruskal build and spans every
+  routed node. Failing the busiest relay heals its dependants onto paths that avoid
+  it, and the seeded mesh survives the loss of any single sensor relay. Route
+  tracing accepts a MAC in any notation, and the backup route avoids the first relay.
+  The telemetry history is ordered, paged and free of duplicates.
+
+## Part 3 — Network Topology and Mesh Routing
+
+All logic for the **Network Topology and Mesh Routing** page lives in one service:
+
+**`smart-x-backend/SmartX.Api/Logic/SmartXTopologyEngine.cs`**
+
+Like the command engine, it is a **singleton** behind one lock: the mesh graph, the
+route history and the simulated outages are live state. It reads which nodes are
+down from the command engine's disconnected-node set (`GetDisconnectedNodeIds`), so
+when a device drops off the mesh on page 2 its neighbours re-route around it here.
+A third hosted service, `TopologyMonitor`, checks the mesh every 3 seconds and
+recomputes the routes when a node goes down or comes back, so each route change is
+recorded when it happens.
+
+**The mesh model.** The 40 registered sensors are laid out in zone clusters around
+two gateways (`GW-01`, `GW-02`). Positions are derived from each node id, so the
+layout is the same on every run. Each sensor links to its nearest neighbours in
+radio range. Each link gets a simulated RSSI, a delivery ratio and an **ETX** weight
+(expected transmissions = 1 / delivery ratio). Any cluster cut off from the gateways
+is joined back on by its shortest bridging link.
+
+| Requirement | Structure | Where | What it does |
+| --- | --- | --- | --- |
+| Graph | `MeshGraph<TNode, TEdge>` (adjacency list in a `Dictionary`) | `BuildGraph`, `AddLink`, `StitchIsolatedClusters` | The mesh itself. A node's neighbours are reached in O(degree), which is the step Dijkstra and Prim repeat for every node they settle. Each edge is stored once and referenced from both endpoints. |
+| Heap | `BinaryHeap<TElement, TPriority>` (hand-written, array-backed) | `RunDijkstra`, `RunPrim` | The frontier of both algorithms. Enqueue and dequeue are O(log n), peek is O(1). Equal priorities leave in insertion order, so routing is deterministic. |
+| Shortest paths | Multi-source **Dijkstra** over the heap | `RunDijkstra` | Every live gateway starts at cost 0, so each node finds its cheapest path to the nearest gateway. Offline nodes are never relaxed, so routes flow around them (**self-healing**). A degraded (warning-state) relay adds a penalty. Stale heap entries are skipped (lazy deletion). Cost is O((V + E) log V). |
+| Minimum spanning tree | **Prim** over the heap, grown from all gateways at once | `RunPrim` | The cheapest set of links that keeps every live node connected: the power-efficient backbone. With several gateways the result is a minimum spanning forest. A test checks it against an independent Kruskal build. |
+| Tree | `RoutingTreeNode` (node → children), one tree per gateway | `BuildRoutingTree`, `CountDependants`, `CollectSubtree` | The shortest-path parents assembled into a routing tree, as RPL's DODAG is. A recursive post-order walk (with a depth guard) counts each relay's dependants, which gives the **critical relays** list and the set of nodes a failure will force to re-route. |
+| Sorted set (red-black tree) | `SortedSet<TelemetryHistoryEntry>` per sensor | `ArchiveFor`, `GetTelemetryHistory` | The stored history is ordered by time, then metric. `GetViewBetween` cuts out the window in O(log n). The window is merged with the live log in one linear pass (`MergeSorted`), without duplicates. |
+| Sorted list | `SortedList<DateTime, RouteSnapshot>` per node | `RecordRouteSnapshots`, `SnapshotAt` | Each node's route over time. A binary search finds the route in effect when each reading was taken, which fills the **Route (hops)** column. |
+
+### Page 3 features
+
+| Feature | What it does | Where it lives |
+| --- | --- | --- |
+| **Topology dashboard** | The live mesh as a graph. Three views: **Full mesh** (routing tree highlighted), **Minimum spanning tree** and **Traced route**. Filter by zone, node or MAC; zoom towards the selected node; hover a link for its cost, RSSI, distance and latency | `MeshCanvas.tsx` ← `GET /api/topology` |
+| **Overview tiles** | Active, offline, degraded and isolated nodes; active links and spare paths; gateways; average and maximum hops; MST total cost against the full mesh | `TopologyPage.tsx` |
+| **Route tracker** | Trace any node by MAC address (any notation) or node id. Shows each hop with its link cost, RSSI and latency, plus totals; the designed route when the node has been re-routed; a backup route that avoids the first relay; and the path along the MST. Clicking a node on the graph traces it | `TopologyPage.tsx` ← `GET /api/topology/routes?key=` |
+| **Self-healing demo** | **Simulate failure** takes the traced node off the mesh. The toast reports how many dependants healed onto another path and which were cut off. **Restore** and **Clear outages** bring nodes back. Real link losses from page 2's simulator heal the same way | `POST /api/topology/nodes/{key}/fail`, `/restore`, `/failures/clear` |
+| **Recompute routes** | Rebuilds the graph from the registry (picking up sensors registered on page 1) and reruns Dijkstra and Prim, reporting the time each took | `POST /api/topology/recompute` |
+| **Telemetry history** | The selected sensor's readings over the last hour, 24 hours or 7 days, newest or oldest first, filtered by metric and paged server-side. Each row shows the route in effect at the time and a Normal / Breach / Suspect / Bad status. Live intake readings are marked. Above the table: per-metric min, max, average and breach count, and the node's route changes in the window | `GET /api/topology/history?key=&hours=&sort=&readingType=&page=` |
+
 ## Code Attributions and Reference List
 
-The advanced object-oriented C# concepts (Part 1) and the data structures and
-recommendation engine (Part 2) were implemented with reference to the sources
+The advanced object-oriented C# concepts (Part 1), the data structures and
+recommendation engine (Part 2), and the graph, heap and tree routing engine (Part 3) were implemented with reference to the sources
 listed below. Each source is also cited in a `// Code Attribution [n]` comment block
 (author, year, title, type, URL, access date, modifications and full reference) at
 the top of the file(s) where the technique is used, using the same reference number
@@ -1026,6 +1085,16 @@ as this list. Section comments inside those files point back to the same numbers
 24. Microsoft, 2025. IncrementalHash Class (System.Security.Cryptography) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash> [Accessed 8 October 2026].
 25. Hoang, V.T., Reyhanitabar, R., Rogaway, P. and Vizár, D., 2015. Online Authenticated-Encryption and its Nonce-Reuse Misuse-Resistance [Source code] Available at: <https://eprint.iacr.org/2015/189> [Accessed 8 October 2026].
 
+**Part 3 — Heaps, graphs, minimum spanning trees and trees**
+
+26. Cormen, T.H., Leiserson, C.E., Rivest, R.L. and Stein, C., 2022. Introduction to Algorithms, Chapter 6: Heapsort (4th edition) [Source code] Available at: <https://mitpress.mit.edu/9780262046305/introduction-to-algorithms/> [Accessed 2 November 2026].
+27. Sedgewick, R. and Wayne, K., 2011. Algorithms, Section 4.3: Minimum Spanning Trees (4th edition) [Source code] Available at: <https://algs4.cs.princeton.edu/43mst/> [Accessed 2 November 2026].
+28. Dijkstra, E.W., 1959. A note on two problems in connexion with graphs [Source code] Available at: <https://doi.org/10.1007/BF01386390> [Accessed 2 November 2026].
+29. Prim, R.C., 1957. Shortest connection networks and some generalizations [Source code] Available at: <https://doi.org/10.1002/j.1538-7305.1957.tb01515.x> [Accessed 2 November 2026].
+30. De Couto, D.S.J., Aguayo, D., Bicket, J. and Morris, R., 2003. A high-throughput path metric for multi-hop wireless routing [Source code] Available at: <https://doi.org/10.1145/938985.939000> [Accessed 2 November 2026].
+31. Microsoft, 2025. SortedSet\<T\> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedset-1> [Accessed 2 November 2026].
+32. Winter, T. et al., 2012. RPL: IPv6 Routing Protocol for Low-Power and Lossy Networks (RFC 6550) [Source code] Available at: <https://www.rfc-editor.org/rfc/rfc6550> [Accessed 2 November 2026].
+
 ### Where each reference is cited in the code
 
 All paths are relative to `smart-x-backend/SmartX.Api/`.
@@ -1043,6 +1112,10 @@ All paths are relative to `smart-x-backend/SmartX.Api/`.
 | `Models/Stream/SensorLogEntry.cs` | 18 | The value stored in each node's timestamp-keyed `SortedList` |
 | `Models/Stream/SuggestedAction.cs` | 20, 21, 22 | The suggestion kinds produced by the association-rule, next-step and problem-device engines |
 | `Logic/Attachments/AttachmentCipher.cs` | 23, 24, 25 | AES-GCM chunk sealing, the incremental SHA-256 hash, and the STREAM-style nonce and authenticated-data framing |
+| `Data/Collections/BinaryHeap.cs` | 15, 26 | The array-backed min-heap: sift-up / sift-down, parent/child index arithmetic, insertion-order tie-break |
+| `Data/Collections/MeshGraph.cs` | 27 | The weighted, undirected adjacency-list graph and its BFS component walk |
+| `Models/Topology/RoutingTreeNode.cs` | 12, 32 | The routing-tree node (a node holding its child nodes) built from each node's preferred parent |
+| `Logic/SmartXTopologyEngine.cs` | 12, 17, 18, 19, 26–32 | Header block lists all; section comments cite 27/30 on `BuildGraph` / `AddLink`, 26/28 on `RunDijkstra`, 26/29 on `RunPrim`, 12/32 on `BuildRoutingTree` / `CountDependants`, 18 on the route history, 31 on `ArchiveFor` / `MergeSorted` |
 
 ## Research Focus
 
