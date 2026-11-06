@@ -18,9 +18,30 @@
 //   graph carries the radio-link metrics, and a BFS component walk used to
 //   stitch isolated clusters back onto the gateways.
 // Reference: Sedgewick, R. and Wayne, K., 2011. Algorithms, Section 4.3: Minimum Spanning Trees (4th edition) [Source code] Available at: <https://algs4.cs.princeton.edu/43mst/> [Accessed 2 November 2026].
+//
+// Code Attribution [36]
+// Author: Sedgewick, R. and Wayne, K.
+// Year: 2011
+// Title: Algorithms, Section 4.1: Undirected Graphs (BreadthFirstPaths, DepthFirstPaths)
+// Version: 4th edition
+// Type: [Source code]
+// Available at: <https://algs4.cs.princeton.edu/41graph/>
+// Accessed: [Accessed 6 November 2026]
+// Modifications: BreadthFirst follows BreadthFirstPaths (a FIFO queue, marked
+//   on enqueue, edgeTo[] kept as each visit's Parent) from several sources at
+//   once. DepthFirst replaces the recursive DepthFirstPaths with an explicit
+//   Stack<T>. Both take a predicate so offline nodes are never entered, and
+//   both record visit order and depth for the connectivity scan.
+// Reference: Sedgewick, R. and Wayne, K., 2011. Algorithms, Section 4.1: Undirected Graphs (4th edition) [Source code] Available at: <https://algs4.cs.princeton.edu/41graph/> [Accessed 6 November 2026].
 // =============================================================================
 
 namespace SmartX.Api.Data.Collections;
+
+/// <summary>
+/// One node reached by a traversal: the order it was reached in, its depth in
+/// the traversal tree, and the neighbour (and edge) it was reached from.
+/// </summary>
+public sealed record TraversalVisit(string NodeId, int Order, int Depth, string? Parent, string? ViaEdgeId);
 
 /// <summary>One undirected, weighted edge. Both endpoints' adjacency lists hold the same instance.</summary>
 public sealed class GraphEdge<TEdge>
@@ -169,6 +190,92 @@ public sealed class MeshGraph<TNode, TEdge>
 
         return components;
     }
+
+    /* ---------- Traversals [36] ---------- */
+
+    /// <summary>
+    /// Breadth-first search from one or more start nodes, entering only nodes
+    /// <paramref name="canEnter"/> accepts. A FIFO queue visits the graph in
+    /// rings — every node one hop out, then two — so each node's
+    /// <see cref="TraversalVisit.Parent"/> is a neighbour on a fewest-hop path
+    /// back to a start. O(V + E).
+    /// </summary>
+    public List<TraversalVisit> BreadthFirst(IEnumerable<string> starts, Func<string, bool> canEnter)
+    {
+        var visits = new List<TraversalVisit>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var frontier = new Queue<TraversalVisit>();
+
+        foreach (var start in starts.Where(_nodes.ContainsKey))
+        {
+            if (seen.Add(start))
+            {
+                frontier.Enqueue(new TraversalVisit(start, 0, 0, null, null));
+            }
+        }
+
+        while (frontier.Count > 0)
+        {
+            var visit = frontier.Dequeue() with { Order = visits.Count };
+            visits.Add(visit);
+
+            foreach (var edge in OrderedEdgesOf(visit.NodeId))
+            {
+                var next = edge.OtherEnd(visit.NodeId);
+                if (canEnter(next) && seen.Add(next))
+                {
+                    frontier.Enqueue(new TraversalVisit(next, 0, visit.Depth + 1, visit.NodeId, edge.Id));
+                }
+            }
+        }
+
+        return visits;
+    }
+
+    /// <summary>
+    /// Depth-first search with an explicit stack (no recursion, so a long chain
+    /// of relays cannot overflow the call stack). It follows one branch as far as
+    /// it goes before backtracking, so <see cref="TraversalVisit.Depth"/> is the
+    /// depth in the DFS tree, not the fewest hops. O(V + E).
+    /// </summary>
+    public List<TraversalVisit> DepthFirst(IEnumerable<string> starts, Func<string, bool> canEnter)
+    {
+        var visits = new List<TraversalVisit>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<TraversalVisit>();
+
+        // Pushed in reverse so the first start (and the first neighbour) is explored first.
+        foreach (var start in starts.Where(_nodes.ContainsKey).Reverse())
+        {
+            stack.Push(new TraversalVisit(start, 0, 0, null, null));
+        }
+
+        while (stack.Count > 0)
+        {
+            var visit = stack.Pop();
+            if (!seen.Add(visit.NodeId))
+            {
+                continue;
+            }
+
+            visits.Add(visit with { Order = visits.Count });
+
+            foreach (var edge in OrderedEdgesOf(visit.NodeId).Reverse())
+            {
+                var next = edge.OtherEnd(visit.NodeId);
+                if (!seen.Contains(next) && canEnter(next))
+                {
+                    stack.Push(new TraversalVisit(next, 0, visit.Depth + 1, visit.NodeId, edge.Id));
+                }
+            }
+        }
+
+        return visits;
+    }
+
+    /// <summary>A node's edges in neighbour-id order, so traversals are deterministic.</summary>
+    private IEnumerable<GraphEdge<TEdge>> OrderedEdgesOf(string node) =>
+        EdgesOf(node).OrderBy(edge => edge.OtherEnd(node), StringComparer.OrdinalIgnoreCase).ToList();
 
     public void Clear()
     {

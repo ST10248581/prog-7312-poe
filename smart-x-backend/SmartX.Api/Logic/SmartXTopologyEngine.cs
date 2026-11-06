@@ -78,11 +78,63 @@
 // Type: [Source code]
 // Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedset-1>
 // Accessed: [Accessed 2 November 2026]
-// Modifications: Each sensor's stored history is kept in a SortedSet (a
-//   red-black tree) ordered by timestamp then metric, so GetViewBetween cuts a
-//   time window out in O(log n) and duplicates are refused by Add. The window
-//   is merged with the live log in one linear pass.
+// Modifications: No code copied. The hand-written AvlTree's Range query
+//   mirrors SortedSet.GetViewBetween, and a duplicate reading (same time and
+//   metric) is refused by Add exactly as SortedSet.Add refuses one.
 // Reference: Microsoft, 2025. SortedSet<T> Class (System.Collections.Generic) [Source code] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedset-1> [Accessed 2 November 2026].
+//
+// Code Attribution [33]
+// Author: Adelson-Velsky, G.M. and Landis, E.M.
+// Year: 1962
+// Title: An algorithm for the organization of information
+// Type: [Source code]
+// Available at: <https://zhjwpku.com/assets/pdf/AED2-10-avl-paper.pdf>
+// Accessed: [Accessed 6 November 2026]
+// Modifications: Each sensor's stored history is indexed in one hand-written
+//   AVL tree per metric, keyed by timestamp. Readings arrive in time order —
+//   the input that degrades a plain BST into a list — and the rotations keep
+//   each tree O(log n) tall, so "moisture on ENV-001 between 14:00 and 16:00"
+//   reads only that metric's tree, and only the part of it inside the range.
+// Reference: Adelson-Velsky, G.M. and Landis, E.M., 1962. An algorithm for the organization of information [Source code] Available at: <https://zhjwpku.com/assets/pdf/AED2-10-avl-paper.pdf> [Accessed 6 November 2026].
+//
+// Code Attribution [34]
+// Author: Sedgewick, R. and Wayne, K.
+// Year: 2011
+// Title: Algorithms, Section 3.2: Binary Search Trees (ordered range search)
+// Version: 4th edition
+// Type: [Source code]
+// Available at: <https://algs4.cs.princeton.edu/32bst/>
+// Accessed: [Accessed 6 November 2026]
+// Modifications: The pruned range search (enter a subtree only if it can hold
+//   keys in [lo, hi]) answers each history window; the per-metric results are
+//   then k-way merged through the binary heap [26].
+// Reference: Sedgewick, R. and Wayne, K., 2011. Algorithms, Section 3.2: Binary Search Trees (4th edition) [Source code] Available at: <https://algs4.cs.princeton.edu/32bst/> [Accessed 6 November 2026].
+//
+// Code Attribution [35]
+// Author: Kruskal, J.B.
+// Year: 1956
+// Title: On the shortest spanning subtree of a graph and the traveling salesman problem
+// Type: [Source code]
+// Available at: <https://doi.org/10.1090/S0002-9939-1956-0078686-7>
+// Accessed: [Accessed 6 November 2026]
+// Modifications: Kruskal's algorithm over a hand-written DisjointSet runs
+//   beside Prim on every recompute, with the live gateways pre-joined into one
+//   root, as an independent check that the spanning tree is minimal.
+// Reference: Kruskal, J.B., 1956. On the shortest spanning subtree of a graph and the traveling salesman problem [Source code] Available at: <https://doi.org/10.1090/S0002-9939-1956-0078686-7> [Accessed 6 November 2026].
+//
+// Code Attribution [36]
+// Author: Sedgewick, R. and Wayne, K.
+// Year: 2011
+// Title: Algorithms, Section 4.1: Undirected Graphs (BreadthFirstPaths, DepthFirstPaths)
+// Version: 4th edition
+// Type: [Source code]
+// Available at: <https://algs4.cs.princeton.edu/41graph/>
+// Accessed: [Accessed 6 November 2026]
+// Modifications: ScanConnectivity runs BFS or DFS from a gateway over live
+//   nodes only, to list every device connected to it within a subnet (zone),
+//   the ones that are down or cut off, and — from each visit's parent — the
+//   relay a node should hop to when its designed relay is down.
+// Reference: Sedgewick, R. and Wayne, K., 2011. Algorithms, Section 4.1: Undirected Graphs (4th edition) [Source code] Available at: <https://algs4.cs.princeton.edu/41graph/> [Accessed 6 November 2026].
 //
 // Code Attribution [32]
 // Author: Winter, T. et al.
@@ -129,9 +181,10 @@ namespace SmartX.Api.Logic;
 ///   <item><description><b>Graph</b> (adjacency list) — the mesh itself; a node's neighbours are reached in O(degree).</description></item>
 ///   <item><description><b>Binary heap</b> — the frontier of Dijkstra and Prim, so the cheapest candidate is always O(log n) away.</description></item>
 ///   <item><description><b>Dijkstra</b> — the fastest route from every node to its nearest live gateway.</description></item>
-///   <item><description><b>Minimum spanning tree</b> (Prim) — the cheapest set of links that keeps every live node connected: the power-efficient backbone.</description></item>
+///   <item><description><b>Minimum spanning tree</b> (Prim, cross-checked by Kruskal) — the cheapest set of links that keeps every live node connected: the power-efficient backbone.</description></item>
+///   <item><description><b>BFS / DFS</b> — which devices are connected to a gateway or subnet, which are down, and where to hop around them.</description></item>
 ///   <item><description><b>Routing tree</b> — the shortest-path parents as a tree per gateway, walked recursively to find the relays most nodes depend on.</description></item>
-///   <item><description><b>SortedSet</b> (red-black tree) — each sensor's history, so a time window is cut out in O(log n).</description></item>
+///   <item><description><b>AVL tree</b> (hand-written, one per sensor per metric) — the history, so a time range is cut out in O(log n + k).</description></item>
 /// </list>
 /// </para>
 /// Registered as a singleton: the graph, the route history and the simulated
@@ -179,6 +232,12 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
     /* ---------- History ---------- */
 
     private const int MaxHistoryHours = 168;
+
+    /// <summary>Longest explicit from/to range accepted: 31 days.</summary>
+    private const int MaxCustomRangeHours = 744;
+
+    /// <summary>The key the scan endpoint uses for "start from every live gateway".</summary>
+    public const string AllGateways = "ALL";
     private const int MaxRouteSnapshotsPerNode = 500;
     private const int MaxPageSize = 200;
 
@@ -223,6 +282,7 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
     private DateTime _lastRecomputedUtc;
     private double _dijkstraMicroseconds;
     private double _primMicroseconds;
+    private (int Edges, double Cost, double Microseconds) _kruskal;
 
     /* ---------- Route history — SortedList [18] ---------- */
 
@@ -232,13 +292,13 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
     /// </summary>
     private readonly Dictionary<string, SortedList<DateTime, RouteSnapshot>> _routeHistory = new(StringComparer.OrdinalIgnoreCase);
 
-    /* ---------- History cache — SortedSet [31] ---------- */
+    /* ---------- History index — AVL trees [33] ---------- */
 
     /// <summary>
-    /// Each sensor's stored readings as a red-black tree, rebuilt only when the
-    /// stored count changes (page 1 can ingest more).
+    /// Each sensor's stored readings, one AVL tree per metric keyed by
+    /// timestamp. Readings page 1 ingests later are inserted incrementally.
     /// </summary>
-    private readonly Dictionary<Guid, (int Count, SortedSet<TelemetryHistoryEntry> Entries)> _archive = new();
+    private readonly Dictionary<Guid, SensorArchive> _archive = new();
 
     public SmartXTopologyEngine(ISmartXDataStore store, SeedOptions options, ISmartXCommandEngine commands)
     {
@@ -454,16 +514,38 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
     // =====================================================================
 
     /// <summary>
-    /// The sensor's readings over the window: the stored history and the live
-    /// intake's log, merged without duplicates, in time order, paged, with the
-    /// route each reading took.
+    /// The sensor's readings over the window: the stored history (cut out of its
+    /// AVL trees) and the live intake's log, merged without duplicates, in time
+    /// order, paged, with the route each reading took.
     /// </summary>
-    public TelemetryHistory? GetTelemetryHistory(string key, int hours, HistorySort sort, ReadingType? readingType, int page, int pageSize)
+    public TelemetryHistory? GetTelemetryHistory(string key, int hours, HistorySort sort, ReadingType? readingType, int page, int pageSize,
+        DateTime? fromUtc = null, DateTime? toUtc = null)
     {
-        var window = Math.Clamp(hours, 1, MaxHistoryHours);
         var size = Math.Clamp(pageSize, 5, MaxPageSize);
         var now = DateTime.UtcNow;
-        var from = now.AddHours(-window);
+        var custom = fromUtc.HasValue && toUtc.HasValue;
+
+        DateTime from, to, upperBound;
+        int window;
+        if (custom)
+        {
+            // An exact range, e.g. 14:00–16:00 today.
+            from = AsUtc(fromUtc!.Value);
+            to = AsUtc(toUtc!.Value);
+            if (to < from) (from, to) = (to, from);
+            if ((to - from).TotalHours > MaxCustomRangeHours) from = to.AddHours(-MaxCustomRangeHours);
+            upperBound = to;
+            window = Math.Max(1, (int)Math.Ceiling((to - from).TotalHours));
+        }
+        else
+        {
+            window = Math.Clamp(hours, 1, MaxHistoryHours);
+            to = now;
+            from = now.AddHours(-window);
+
+            // A little slack for device clocks running ahead.
+            upperBound = now.AddMinutes(5);
+        }
 
         lock (_sync)
         {
@@ -479,22 +561,36 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
             var started = Stopwatch.GetTimestamp();
             var limits = LimitsFor(profile);
 
-            // ---- Archive: a window of the red-black tree [31] ----
+            // ---- Archive: a range search on each metric's AVL tree [33], [34] ----
+            // Filtering by metric picks the tree, so the other metrics are never read.
             var archive = ArchiveFor(profile, limits);
-            var lower = new TelemetryHistoryEntry { TimestampUtc = from, ReadingType = (ReadingType)int.MinValue };
-            var upper = new TelemetryHistoryEntry { TimestampUtc = now.AddMinutes(5), ReadingType = (ReadingType)int.MaxValue };
-            var archived = archive.GetViewBetween(lower, upper);
+            var ranges = new List<List<TelemetryHistoryEntry>>();
+            int nodesVisited = 0, indexed = 0, treeHeight = 0;
+
+            foreach (var (type, tree) in archive.Trees.OrderBy(pair => pair.Key))
+            {
+                if (readingType is not null && type != readingType)
+                {
+                    continue;
+                }
+
+                ranges.Add(tree.Range(from, upperBound, out var visited));
+                nodesVisited += visited;
+                indexed += tree.Count;
+                treeHeight = Math.Max(treeHeight, tree.Height);
+            }
+
+            var archived = MergeByTime(ranges);
 
             // ---- Live: the command engine's sorted log for the node [18] ----
             var live = _commands.GetSensorLog(node.Id, from)
                 .Where(entry => entry.Kind == SensorLogKind.Reading && entry.ReadingType.HasValue && entry.Value.HasValue)
+                .Where(entry => entry.TimestampUtc <= upperBound && (readingType is null || entry.ReadingType == readingType))
                 .Select(entry => ToHistoryEntry(entry.TimestampUtc, entry.ReadingType!.Value, entry.Value!.Value, ReadingQuality.Good, false, HistorySource.Live, limits))
                 .ToList();
             live.Sort(HistoryOrder.Instance);
 
-            var merged = MergeSorted(archived, live)
-                .Where(entry => readingType is null || entry.ReadingType == readingType)
-                .ToList();
+            var merged = MergeSorted(archived, live).ToList();
 
             var totalPages = Math.Max(1, (int)Math.Ceiling(merged.Count / (double)size));
             var current = Math.Clamp(page, 1, totalPages);
@@ -527,7 +623,8 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
                 Zone = profile.Zone,
                 Hours = window,
                 FromUtc = from,
-                ToUtc = now,
+                ToUtc = to,
+                IsCustomRange = custom,
                 Sort = sort,
                 ReadingType = readingType,
                 Page = current,
@@ -536,12 +633,211 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
                 TotalPages = totalPages,
                 Items = items,
                 Metrics = Summarise(merged),
-                RouteChanges = RouteChangesBetween(node.Id, from, now),
+                RouteChanges = RouteChangesBetween(node.Id, from, to),
                 AvailableReadingTypes = ReadingTypeProfile.ForCategory(profile.Category).ToList(),
-                WindowReadMicroseconds = Math.Round(elapsed.TotalMicroseconds, 2)
+                WindowReadMicroseconds = Math.Round(elapsed.TotalMicroseconds, 2),
+                IndexedReadings = indexed,
+                NodesVisited = nodesVisited,
+                TreeHeight = treeHeight
             };
         }
     }
+
+    /// <summary>Query-string dates may arrive local or unspecified; the history is stored in UTC.</summary>
+    private static DateTime AsUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+    };
+
+    // =====================================================================
+    // Connectivity scan — BFS / DFS [36]
+    // =====================================================================
+
+    /// <summary>
+    /// Walks the live mesh from a gateway (or every gateway) with BFS or DFS.
+    /// Offline nodes are never entered, so whatever the walk reaches is exactly
+    /// what is still connected. Within the chosen subnet (zone) it then reports
+    /// each device as connected, down, served by the other gateway or cut off,
+    /// and for every node whose designed relay is down, the neighbour the walk
+    /// reached it from — the relay to hop to instead.
+    /// </summary>
+    public ConnectivityScan? ScanConnectivity(string root, string? zone, TraversalAlgorithm algorithm)
+    {
+        lock (_sync)
+        {
+            EnsureReady();
+            RecomputeIfChanged(force: false);
+
+            var key = root?.Trim() ?? string.Empty;
+            var all = string.Equals(key, AllGateways, StringComparison.OrdinalIgnoreCase);
+            var gateways = _graph.Nodes.Where(node => node.Kind == MeshNodeKind.Gateway).Select(node => node.Id).ToList();
+
+            string rootLabel;
+            List<string> starts;
+            if (all)
+            {
+                rootLabel = AllGateways;
+                starts = gateways.Where(IsUp).ToList();
+            }
+            else
+            {
+                var (gateway, _, _) = Resolve(key);
+                if (gateway is null || gateway.Kind != MeshNodeKind.Gateway)
+                {
+                    return null;
+                }
+
+                rootLabel = gateway.Id;
+                starts = IsUp(gateway.Id) ? [gateway.Id] : [];
+            }
+
+            // Only live sensors can be entered: a gateway is a destination, never a relay.
+            bool CanEnter(string id) => IsUp(id) && _graph[id].Kind == MeshNodeKind.Sensor;
+
+            var started = Stopwatch.GetTimestamp();
+            var visits = algorithm == TraversalAlgorithm.Dfs
+                ? _graph.DepthFirst(starts, CanEnter)
+                : _graph.BreadthFirst(starts, CanEnter);
+            var elapsed = Stopwatch.GetElapsedTime(started);
+
+            var reached = visits.ToDictionary(visit => visit.NodeId, StringComparer.OrdinalIgnoreCase);
+
+            // A node the scanned gateway cannot reach may still reach the other
+            // one; a BFS from every gateway tells "served elsewhere" from "cut off".
+            var anyGateway = all
+                ? reached
+                : _graph.BreadthFirst(gateways.Where(IsUp), CanEnter).ToDictionary(visit => visit.NodeId, StringComparer.OrdinalIgnoreCase);
+
+            var zoneFilter = string.IsNullOrWhiteSpace(zone) ? null : zone.Trim();
+            var scope = _graph.Nodes
+                .Where(node => node.Kind == MeshNodeKind.Sensor)
+                .Where(node => zoneFilter is null || string.Equals(node.Zone, zoneFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var scan = new ConnectivityScan
+            {
+                Root = rootLabel,
+                Algorithm = algorithm,
+                Zone = zoneFilter,
+                RootOnline = starts.Count > 0,
+                InScope = scope.Count,
+                TotalVisited = visits.Count,
+                TraversalMicroseconds = Math.Round(elapsed.TotalMicroseconds, 2),
+                GeneratedUtc = DateTime.UtcNow
+            };
+
+            var traversalLinks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var node in scope)
+            {
+                var item = new ScanNode
+                {
+                    NodeId = node.Id,
+                    Name = node.Name,
+                    Zone = node.Zone,
+                    Kind = node.Kind,
+                    OfflineReason = _down.GetValueOrDefault(node.Id, OfflineReason.None)
+                };
+
+                if (reached.TryGetValue(node.Id, out var visit))
+                {
+                    item.Status = ScanNodeStatus.Connected;
+                    item.VisitOrder = visit.Order;
+                    item.Depth = visit.Depth;
+                    item.HopVia = visit.Parent;
+
+                    // Walk the traversal tree back to the root, for the graph highlight.
+                    for (var step = visit; step.ViaEdgeId is not null && traversalLinks.Add(step.ViaEdgeId); step = reached[step.Parent!])
+                    {
+                    }
+                }
+                else if (!IsUp(node.Id))
+                {
+                    item.Status = ScanNodeStatus.Down;
+                    item.StrandedDependants = _designed.TreeIndex.TryGetValue(node.Id, out var designedNode) ? designedNode.SubtreeSize : 0;
+                    item.AlternateRelays = _graph.EdgesOf(node.Id)
+                        .Select(edge => edge.OtherEnd(node.Id))
+                        .Where(reached.ContainsKey)
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
+                else if (anyGateway.TryGetValue(node.Id, out var elsewhere))
+                {
+                    item.Status = ScanNodeStatus.OtherGateway;
+                    item.Depth = elsewhere.Depth;
+                    item.HopVia = elsewhere.Parent;
+                }
+                else
+                {
+                    item.Status = ScanNodeStatus.CutOff;
+                    item.BlockedBy = DownNodesAround(node.Id, CanEnter);
+                }
+
+                scan.Nodes.Add(item);
+            }
+
+            // Where to hop: live nodes whose designed relay is down.
+            foreach (var item in scan.Nodes.Where(item => item.Status != ScanNodeStatus.Down))
+            {
+                if (!_designed.Parent.TryGetValue(item.NodeId, out var designedRelay) || IsUp(designedRelay))
+                {
+                    continue;
+                }
+
+                var hopsTo = item.Status == ScanNodeStatus.OtherGateway
+                    ? anyGateway[item.NodeId].Depth
+                    : item.Depth;
+                var target = item.Status == ScanNodeStatus.OtherGateway ? "the other gateway" : rootLabel == AllGateways ? "a gateway" : rootLabel;
+
+                scan.HopAdvice.Add(new HopAdvice
+                {
+                    NodeId = item.NodeId,
+                    DownRelay = designedRelay,
+                    HopVia = item.HopVia,
+                    HopsToRoot = item.Status == ScanNodeStatus.CutOff ? null : hopsTo,
+                    Advice = item.Status == ScanNodeStatus.CutOff
+                        ? $"{designedRelay} is down and no live path remains. Restore {string.Join(" or ", item.BlockedBy.DefaultIfEmpty(designedRelay))}."
+                        : $"{designedRelay} is down: hop via {item.HopVia} instead, {hopsTo} hop(s) to {target}" +
+                          (algorithm == TraversalAlgorithm.Dfs && item.Status == ScanNodeStatus.Connected ? " (DFS path — BFS finds the fewest hops)." : ".")
+                });
+            }
+
+            scan.Nodes = scan.Nodes
+                .OrderBy(item => item.VisitOrder ?? int.MaxValue)
+                .ThenBy(item => item.Status)
+                .ThenBy(item => item.NodeId, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            scan.ConnectedCount = scan.Nodes.Count(item => item.Status == ScanNodeStatus.Connected);
+            scan.DownCount = scan.Nodes.Count(item => item.Status == ScanNodeStatus.Down);
+            scan.OtherGatewayCount = scan.Nodes.Count(item => item.Status == ScanNodeStatus.OtherGateway);
+            scan.CutOffCount = scan.Nodes.Count(item => item.Status == ScanNodeStatus.CutOff);
+            scan.MaxDepth = scan.Nodes.Where(item => item.Status == ScanNodeStatus.Connected).Select(item => item.Depth ?? 0).DefaultIfEmpty(0).Max();
+            scan.TraversalLinkIds = traversalLinks.Order(StringComparer.OrdinalIgnoreCase).ToList();
+
+            var name = algorithm == TraversalAlgorithm.Dfs ? "DFS" : "BFS";
+            var from = rootLabel == AllGateways ? "every gateway" : rootLabel;
+            var where = zoneFilter is null ? "the mesh" : zoneFilter;
+            scan.Message = !scan.RootOnline
+                ? $"{from} is down: no device can reach it. {scan.OtherGatewayCount} device(s) in {where} are served by another gateway."
+                : $"{name} from {from} reached {scan.ConnectedCount} of {scan.InScope} device(s) in {where}" +
+                  $" (max depth {scan.MaxDepth}); {scan.DownCount} down, {scan.CutOffCount} cut off" +
+                  (scan.OtherGatewayCount > 0 ? $", {scan.OtherGatewayCount} on another gateway." : ".");
+
+            return scan;
+        }
+    }
+
+    /// <summary>The down nodes bordering the live cluster that <paramref name="nodeId"/> is stranded in.</summary>
+    private List<string> DownNodesAround(string nodeId, Func<string, bool> canEnter) =>
+        _graph.BreadthFirst([nodeId], canEnter)
+            .SelectMany(visit => _graph.EdgesOf(visit.NodeId).Select(edge => edge.OtherEnd(visit.NodeId)))
+            .Where(id => !IsUp(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     // =====================================================================
     // Graph construction [27], [30]
@@ -836,6 +1132,10 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
         _mst = RunPrim(IsUp);
         _primMicroseconds = Math.Round(Stopwatch.GetElapsedTime(started).TotalMicroseconds, 2);
 
+        started = Stopwatch.GetTimestamp();
+        var (kruskalEdges, kruskalCost) = RunKruskal(IsUp);
+        _kruskal = (kruskalEdges, kruskalCost, Math.Round(Stopwatch.GetElapsedTime(started).TotalMicroseconds, 2));
+
         var previous = _current;
         _current = routes;
         _lastRecomputedUtc = DateTime.UtcNow;
@@ -1059,6 +1359,39 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
         return forest;
     }
 
+    /// <summary>
+    /// Kruskal [35]: take the live links cheapest first and keep each one that
+    /// joins two different trees, using a disjoint-set to spot a cycle. The live
+    /// gateways start joined into one root (as Prim grows from all of them at
+    /// once), and trees never joined to that root — clusters cut off by a
+    /// failure — are left out, as Prim leaves them out. The two builds must then
+    /// agree on cost; the summary reports whether they do. O(E log E).
+    /// </summary>
+    private (int Edges, double Cost) RunKruskal(Func<string, bool> isUp)
+    {
+        const string root = "⊤GATEWAYS";
+        var sets = new DisjointSet();
+        foreach (var gateway in _graph.Nodes.Where(node => node.Kind == MeshNodeKind.Gateway && isUp(node.Id)))
+        {
+            sets.Union(root, gateway.Id);
+        }
+
+        var chosen = new List<GraphEdge<LinkInfo>>();
+        foreach (var edge in _graph.Edges
+                     .Where(edge => isUp(edge.Either) && isUp(edge.Other))
+                     .OrderBy(edge => edge.Weight)
+                     .ThenBy(edge => edge.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            if (sets.Union(edge.Either, edge.Other))
+            {
+                chosen.Add(edge);
+            }
+        }
+
+        var anchored = chosen.Where(edge => sets.Connected(edge.Either, root)).ToList();
+        return (anchored.Count, Math.Round(anchored.Sum(edge => edge.Weight), 3));
+    }
+
     // =====================================================================
     // Route history — SortedList [18]
     // =====================================================================
@@ -1174,33 +1507,87 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
     }
 
     // =====================================================================
-    // History helpers — SortedSet [31]
+    // History helpers — AVL trees [33], [34]
     // =====================================================================
 
-    /// <summary>The sensor's stored readings as a red-black tree, rebuilt only when more have been stored.</summary>
-    private SortedSet<TelemetryHistoryEntry> ArchiveFor(SensorProfile profile, IReadOnlyDictionary<ReadingType, (double Min, double Max, bool IsBoolean)> limits)
+    /// <summary>
+    /// The sensor's stored readings, one AVL tree per metric keyed by timestamp.
+    /// The store only appends, so readings added since the last call are
+    /// inserted (O(log n) each) rather than the trees being rebuilt.
+    /// </summary>
+    private SensorArchive ArchiveFor(SensorProfile profile, IReadOnlyDictionary<ReadingType, (double Min, double Max, bool IsBoolean)> limits)
     {
         var readings = _store.ReadingsFor(profile.Id);
-        if (_archive.TryGetValue(profile.Id, out var cached) && cached.Count == readings.Count)
+        if (!_archive.TryGetValue(profile.Id, out var archive) || readings.Count < archive.Indexed)
         {
-            return cached.Entries;
+            // First query, or the store was reseeded: index from scratch.
+            archive = new SensorArchive();
+            _archive[profile.Id] = archive;
         }
 
-        var entries = new SortedSet<TelemetryHistoryEntry>(HistoryOrder.Instance);
-        foreach (var reading in readings.ToArray())
+        if (archive.Indexed == readings.Count)
         {
+            return archive;
+        }
+
+        var snapshot = readings.ToArray();
+        for (var index = archive.Indexed; index < snapshot.Length; index++)
+        {
+            var reading = snapshot[index];
             var value = reading.NumericValue ?? (reading.BooleanValue is bool flag ? (flag ? 1 : 0) : null);
             if (value is null)
             {
                 continue;
             }
 
-            // Add refuses an entry the set already holds (same time and metric), so a replayed batch cannot double up.
-            entries.Add(ToHistoryEntry(reading.TimestampUtc, reading.ReadingType, value.Value, reading.Quality, reading.IsAnomaly, HistorySource.Archive, limits));
+            if (!archive.Trees.TryGetValue(reading.ReadingType, out var tree))
+            {
+                tree = new AvlTree<DateTime, TelemetryHistoryEntry>();
+                archive.Trees[reading.ReadingType] = tree;
+            }
+
+            // Add refuses a key the tree already holds (same time, same metric), so a replayed batch cannot double up.
+            tree.Add(reading.TimestampUtc, ToHistoryEntry(reading.TimestampUtc, reading.ReadingType, value.Value, reading.Quality, reading.IsAnomaly, HistorySource.Archive, limits));
         }
 
-        _archive[profile.Id] = (readings.Count, entries);
-        return entries;
+        archive.Indexed = snapshot.Length;
+        return archive;
+    }
+
+    /// <summary>
+    /// K-way merge of the per-metric range results (each already in time order)
+    /// into one time-ordered list, through the binary heap [26]: the heap holds
+    /// the head of each list, so each step is O(log k).
+    /// </summary>
+    private static List<TelemetryHistoryEntry> MergeByTime(List<List<TelemetryHistoryEntry>> lists)
+    {
+        if (lists.Count == 1)
+        {
+            return lists[0];
+        }
+
+        var merged = new List<TelemetryHistoryEntry>(lists.Sum(list => list.Count));
+        var heap = new BinaryHeap<(int List, int Index), TelemetryHistoryEntry>(Math.Max(1, lists.Count), HistoryOrder.Instance);
+
+        for (var list = 0; list < lists.Count; list++)
+        {
+            if (lists[list].Count > 0)
+            {
+                heap.Enqueue((list, 0), lists[list][0]);
+            }
+        }
+
+        while (heap.TryDequeue(out var head, out var entry))
+        {
+            merged.Add(entry);
+            var next = head.Index + 1;
+            if (next < lists[head.List].Count)
+            {
+                heap.Enqueue((head.List, next), lists[head.List][next]);
+            }
+        }
+
+        return merged;
     }
 
     /// <summary>
@@ -1407,6 +1794,10 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
                 RedundantLinks = activeLinks.Count - _mst.EdgeIds.Count,
                 DijkstraMicroseconds = _dijkstraMicroseconds,
                 PrimMicroseconds = _primMicroseconds,
+                KruskalEdgeCount = _kruskal.Edges,
+                KruskalTotalCost = _kruskal.Cost,
+                KruskalMicroseconds = _kruskal.Microseconds,
+                MstVerified = _kruskal.Edges == _mst.EdgeIds.Count && Math.Abs(_kruskal.Cost - _mst.TotalCost) < 1e-6,
                 RouteVersion = _routeVersion,
                 LastRecomputedUtc = _lastRecomputedUtc
             },
@@ -1631,6 +2022,13 @@ public class SmartXTopologyEngine : ISmartXTopologyEngine
     }
 
     private readonly record struct RouteSnapshot(int? Hops, string? GatewayId, string? NextHop);
+
+    /// <summary>One sensor's indexed history: an AVL tree per metric, and how many stored readings have been inserted.</summary>
+    private sealed class SensorArchive
+    {
+        public int Indexed { get; set; }
+        public Dictionary<ReadingType, AvlTree<DateTime, TelemetryHistoryEntry>> Trees { get; } = new();
+    }
 
     /// <summary>Time first, then metric — the order of the history set, and what makes two entries "the same reading".</summary>
     private sealed class HistoryOrder : IComparer<TelemetryHistoryEntry>

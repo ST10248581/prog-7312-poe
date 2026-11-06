@@ -376,3 +376,8 @@
   justify-content: space-between;
   margin-top: var(--space-3);
 }
+
+/* ---------- Connectivity scan ---------- */
+
+.scan-row { cursor: pointer; }
+.scan-row:hover td { background: rgb(var(--accent-rgb) / 0.06); }

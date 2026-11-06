@@ -10,17 +10,22 @@ import {
   getTelemetryHistory,
   getTopology,
   recomputeTopology,
+  scanConnectivity,
   setNodeFailure,
   traceRoute,
 } from "../services/apiService";
 import type {
+  ConnectivityScan,
   HistoryEntryStatus,
   HistorySort,
   MeshTopology,
   ReadingType,
   RoutePath,
   RouteTrace,
+  ScanNode,
+  ScanNodeStatus,
   TelemetryHistory,
+  TraversalAlgorithm,
 } from "../services/apiService";
 import { isAbortError, usePolling } from "../hooks/usePolling";
 import { usePersistentState } from "../state/appState";
@@ -39,12 +44,17 @@ const VIEW_MODES: { id: ViewMode; label: string }[] = [
   { id: "mesh", label: "Full mesh" },
   { id: "mst", label: "Minimum spanning tree" },
   { id: "route", label: "Traced route" },
+  { id: "scan", label: "BFS / DFS scan" },
 ];
+
+/** hours = 0 selects an exact from/to range instead of "the last N hours". */
+const CUSTOM_RANGE = 0;
 
 const TIME_RANGES = [
   { hours: 1, label: "Last hour" },
   { hours: 24, label: "Last 24 hours" },
   { hours: 168, label: "Last 7 days" },
+  { hours: CUSTOM_RANGE, label: "Custom range…" },
 ];
 
 const STATUS_BADGE: Record<HistoryEntryStatus, string> = {
@@ -53,6 +63,48 @@ const STATUS_BADGE: Record<HistoryEntryStatus, string> = {
   Suspect: "badge badge-warning",
   Bad: "badge badge-danger",
 };
+
+const SCAN_BADGE: Record<ScanNodeStatus, { className: string; label: string }> = {
+  Connected: { className: "badge badge-ok", label: "Connected" },
+  Down: { className: "badge badge-danger", label: "Down" },
+  CutOff: { className: "badge badge-danger", label: "Cut off" },
+  OtherGateway: { className: "badge badge-warning", label: "Other gateway" },
+};
+
+const ALGORITHMS: { id: TraversalAlgorithm; label: string }[] = [
+  { id: "Bfs", label: "BFS" },
+  { id: "Dfs", label: "DFS" },
+];
+
+/** A Date as a `datetime-local` input value, in the operator's own time zone. */
+function toLocalInput(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** The most recent 14:00–16:00 that has already ended: today's if it is past 16:00, else yesterday's. */
+function defaultCustomRange(): { from: string; to: string } {
+  const to = new Date();
+  if (to.getHours() < 16) to.setDate(to.getDate() - 1);
+  to.setHours(16, 0, 0, 0);
+  const from = new Date(to);
+  from.setHours(14);
+  return { from: toLocalInput(from), to: toLocalInput(to) };
+}
+
+function describeScanNode(node: ScanNode): string {
+  switch (node.status) {
+    case "Down":
+      return `${humanise(node.offlineReason)} · ${node.strandedDependants} node(s) relayed through it` +
+        (node.alternateRelays.length > 0 ? ` · traffic can hop via ${node.alternateRelays.join(", ")}` : " · no live neighbour to take over");
+    case "CutOff":
+      return node.blockedBy.length > 0 ? `No live path — blocked by ${node.blockedBy.join(", ")}` : "No live path to a gateway";
+    case "OtherGateway":
+      return "Reachable, but only through another gateway";
+    default:
+      return node.depth === 0 ? "Root" : "";
+  }
+}
 
 /** An unreachable API is announced app-wide by ApiStatusBanner; only the API's own rejections are shown here. */
 function describeError(err: unknown, fallback: string): string | null {
@@ -95,6 +147,11 @@ function TopologyPage() {
   const [hours, setHours] = usePersistentState<number>("topology.hours", 24, { session: true });
   const [sort, setSort] = usePersistentState<HistorySort>("topology.sort", "Newest", { session: true });
   const [readingType, setReadingType] = usePersistentState<ReadingType | "">("topology.readingType", "", { session: true });
+  const [customFrom, setCustomFrom] = usePersistentState<string>("topology.customFrom", defaultCustomRange().from, { session: true });
+  const [customTo, setCustomTo] = usePersistentState<string>("topology.customTo", defaultCustomRange().to, { session: true });
+  const [scanRoot, setScanRoot] = usePersistentState<string>("topology.scanRoot", "ALL", { session: true });
+  const [scanZone, setScanZone] = usePersistentState<string>("topology.scanZone", "", { session: true });
+  const [algorithm, setAlgorithm] = usePersistentState<TraversalAlgorithm>("topology.algorithm", "Bfs", { session: true });
   const [page, setPage] = useState(1);
 
   const [filter, setFilter] = useState("");
@@ -105,8 +162,10 @@ function TopologyPage() {
   const [topology, setTopology] = usePersistentState<MeshTopology | null>("topology.data", null);
   const [trace, setTrace] = useState<RouteTrace | null>(null);
   const [history, setHistory] = useState<TelemetryHistory | null>(null);
+  const [scan, setScan] = useState<ConnectivityScan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   /* ---------- Polling: topology and the traced route together ---------- */
@@ -130,13 +189,36 @@ function TopologyPage() {
   const sensors = (topology?.nodes ?? []).filter((node) => node.kind === "Sensor");
   const activeHistoryKey = historyKey || sensors[0]?.id || "";
 
+  const isCustom = hours === CUSTOM_RANGE;
+  const customFromDate = new Date(customFrom);
+  const customToDate = new Date(customTo);
+  const customRangeError = !isCustom
+    ? null
+    : Number.isNaN(customFromDate.getTime()) || Number.isNaN(customToDate.getTime())
+      ? "Enter both a start and an end time."
+      : customFromDate >= customToDate
+        ? "The start of the range must be before the end."
+        : null;
+
   usePolling(
     async (signal) => {
       if (!activeHistoryKey) return;
+      if (customRangeError) {
+        setHistoryError(customRangeError);
+        return;
+      }
       try {
         const result = await getTelemetryHistory(
           activeHistoryKey,
-          { hours, sort, readingType: readingType || null, page, pageSize: HISTORY_PAGE_SIZE },
+          {
+            hours: isCustom ? undefined : hours,
+            from: isCustom ? customFromDate.toISOString() : null,
+            to: isCustom ? customToDate.toISOString() : null,
+            sort,
+            readingType: readingType || null,
+            page,
+            pageSize: HISTORY_PAGE_SIZE,
+          },
           signal
         );
         setHistory(result);
@@ -145,10 +227,35 @@ function TopologyPage() {
         if (!isAbortError(err)) setHistoryError(describeError(err, "Could not load the history."));
       }
     },
-    { intervalMs: HISTORY_REFRESH_MS, key: JSON.stringify([activeHistoryKey, hours, sort, readingType, page]) }
+    {
+      intervalMs: HISTORY_REFRESH_MS,
+      key: JSON.stringify([activeHistoryKey, hours, sort, readingType, page, isCustom ? customFrom : "", isCustom ? customTo : ""]),
+    }
+  );
+
+  /* ---------- Polling: the BFS / DFS connectivity scan ---------- */
+  usePolling(
+    async (signal) => {
+      try {
+        setScan(await scanConnectivity(scanRoot, scanZone || null, algorithm, signal));
+        setScanError(null);
+      } catch (err) {
+        if (!isAbortError(err)) setScanError(describeError(err, "Could not run the scan."));
+      }
+    },
+    { intervalMs: REFRESH_MS, key: JSON.stringify([scanRoot, scanZone, algorithm]) }
   );
 
   /* ---------- Actions ---------- */
+
+  /** Re-run the scan straight after a node goes down or comes back, rather than waiting for the next poll. */
+  const refreshScan = async () => {
+    try {
+      setScan(await scanConnectivity(scanRoot, scanZone || null, algorithm));
+    } catch {
+      // The poll reports errors; a missed refresh here is picked up on the next tick.
+    }
+  };
 
   const selectNode = (nodeId: string) => {
     setMacInput(nodeId);
@@ -176,9 +283,10 @@ function TopologyPage() {
       toast.show({
         tone: "success",
         title: "Routes recomputed",
-        message: `Dijkstra ${formatNumber(mesh.summary.dijkstraMicroseconds)} µs · Prim ${formatNumber(mesh.summary.primMicroseconds)} µs over ${mesh.summary.activeLinks} active links.`,
+        message: `Dijkstra ${formatNumber(mesh.summary.dijkstraMicroseconds)} µs · Prim ${formatNumber(mesh.summary.primMicroseconds)} µs · Kruskal ${formatNumber(mesh.summary.kruskalMicroseconds)} µs over ${mesh.summary.activeLinks} active links.`,
       });
       if (traceKey) setTrace(await traceRoute(traceKey));
+      void refreshScan();
     } catch (err) {
       const message = describeError(err, "Recompute failed.");
       if (message) toast.show({ tone: "error", title: "Recompute failed", message });
@@ -198,6 +306,7 @@ function TopologyPage() {
         message: result.message,
       });
       if (traceKey) setTrace(await traceRoute(traceKey));
+      void refreshScan();
     } catch (err) {
       const message = describeError(err, "The change was not applied.");
       if (message) toast.show({ tone: "error", title: "Could not change the node", message });
@@ -211,6 +320,7 @@ function TopologyPage() {
     try {
       setTopology(await clearNodeFailures());
       if (traceKey) setTrace(await traceRoute(traceKey));
+      void refreshScan();
     } catch (err) {
       const message = describeError(err, "Could not clear the outages.");
       if (message) toast.show({ tone: "error", title: "Could not clear outages", message });
@@ -225,6 +335,37 @@ function TopologyPage() {
   const traced = trace?.found ? trace.node : null;
   const primary = trace?.primary ?? null;
   const simulatedCount = topology?.nodes.filter((node) => node.isSimulatedFailure).length ?? 0;
+  const gateways = topology?.nodes.filter((node) => node.kind === "Gateway") ?? [];
+  const spanning = trace?.spanning ?? null;
+
+  // What the graph emphasises depends on the view.
+  const highlight =
+    view === "route"
+      ? { links: primary?.linkIds ?? [], nodes: primary?.hops.map((hop) => hop.nodeId) ?? [] }
+      : view === "mst"
+        ? { links: spanning?.linkIds ?? [], nodes: spanning?.hops.map((hop) => hop.nodeId) ?? [] }
+        : view === "scan" && scan
+          ? {
+              links: scan.traversalLinkIds,
+              // The subnet's devices, plus any relays outside it that the traversal passed through.
+              nodes: [
+                ...gateways.map((node) => node.id),
+                ...scan.nodes.map((node) => node.nodeId),
+                ...scan.traversalLinkIds.flatMap((id) => id.split("|")),
+              ],
+            }
+          : { links: [], nodes: [] };
+
+  const canvasNote =
+    view === "mst"
+      ? `Spanning tree: ${summary?.mstEdgeCount} links, ${summary?.mstTotalCost} expected transmissions (Prim ${formatNumber(summary?.primMicroseconds ?? 0)} µs` +
+        `, Kruskal ${summary?.mstVerified ? "agrees ✓" : `differs (${summary?.kruskalTotalCost})`})` +
+        (spanning ? ` · ${traced?.id}'s power-efficient path: ${pathSummary(spanning)}` : " · trace a node to see its power-efficient path")
+      : view === "route"
+        ? primary ? `Route ${pathSummary(primary)}` : "Trace a node to highlight its route"
+        : view === "scan"
+          ? scan ? `${scan.algorithm.toUpperCase()} traversal tree from ${scan.root === "ALL" ? "every gateway" : scan.root}${scan.zone ? ` · subnet ${scan.zone}` : ""}` : "Running the scan…"
+          : `Routing tree highlighted · Dijkstra ${formatNumber(summary?.dijkstraMicroseconds ?? 0)} µs · click a node to trace it`;
 
   return (
     <div className="topology-page">
@@ -282,7 +423,12 @@ function TopologyPage() {
         <StatTile
           label="MST total cost"
           value={summary ? formatNumber(summary.mstTotalCost, 2) : "—"}
-          hint={summary ? `${summary.mstEdgeCount} links vs ${formatNumber(summary.activeMeshCost, 1)} for the full mesh` : "Sum of spanning-tree weights"}
+          hint={
+            summary
+              ? `${summary.mstEdgeCount} links vs ${formatNumber(summary.activeMeshCost, 1)} for the full mesh · Kruskal ${summary.mstVerified ? "agrees ✓" : "differs"}`
+              : "Sum of spanning-tree weights"
+          }
+          tone={summary && !summary.mstVerified ? "danger" : "default"}
         />
       </section>
 
@@ -332,8 +478,8 @@ function TopologyPage() {
                 nodes={topology.nodes}
                 links={topology.links}
                 view={view}
-                routeLinkIds={primary?.linkIds ?? []}
-                routeNodeIds={primary?.hops.map((hop) => hop.nodeId) ?? []}
+                routeLinkIds={highlight.links}
+                routeNodeIds={highlight.nodes}
                 selectedId={traced?.id ?? null}
                 filter={filter.trim().toLowerCase()}
                 zoom={zoom}
@@ -342,15 +488,7 @@ function TopologyPage() {
             ) : (
               <span className="topology-canvas-note">Loading the live topology…</span>
             )}
-            {topology && (
-              <span className="topology-canvas-note">
-                {view === "mst"
-                  ? `Spanning tree: ${summary?.mstEdgeCount} links, cost ${summary?.mstTotalCost} (Prim, ${formatNumber(summary?.primMicroseconds ?? 0)} µs)`
-                  : view === "route"
-                    ? primary ? `Route ${pathSummary(primary)}` : "Trace a node to highlight its route"
-                    : `Routing tree highlighted · Dijkstra ${formatNumber(summary?.dijkstraMicroseconds ?? 0)} µs · click a node to trace it`}
-              </span>
-            )}
+            {topology && <span className="topology-canvas-note">{canvasNote}</span>}
           </div>
 
           <ul className="topology-legend" aria-label="Legend">
@@ -361,7 +499,10 @@ function TopologyPage() {
             <li><span className="legend-dot legend-offline" /> Offline / isolated</li>
             <li><span className="legend-line" /> Mesh link (weighted)</li>
             <li><span className="legend-line legend-line-tree" /> {view === "mst" ? "Spanning-tree link" : "Routing-tree link"}</li>
-            <li><span className="legend-line legend-line-route" /> Active route</li>
+            <li>
+              <span className="legend-line legend-line-route" />{" "}
+              {view === "mst" ? "Power-efficient path (MST)" : view === "scan" ? "Traversal tree" : "Active route"}
+            </li>
           </ul>
         </section>
 
@@ -431,7 +572,13 @@ function TopologyPage() {
                 </div>
               )}
               {trace.spanning && (
-                <div><dt>Along the MST</dt><dd>{pathSummary(trace.spanning)} · cost {trace.spanning.totalCost}</dd></div>
+                <div>
+                  <dt>Power-efficient path (MST)</dt>
+                  <dd>
+                    {pathSummary(trace.spanning)} · {trace.spanning.totalCost} expected transmissions
+                    {primary && trace.spanning.totalCost !== primary.totalCost && ` vs ${primary.totalCost} on the shortest route`}
+                  </dd>
+                </div>
               )}
             </dl>
           )}
@@ -469,12 +616,149 @@ function TopologyPage() {
         </aside>
       </div>
 
-      {/* 3. Telemetry history */}
+      {/* 3. Connectivity scan: BFS / DFS */}
+      <section className="topology-panel" aria-label="Connectivity scan">
+        <header className="panel-head">
+          <h2>
+            Connectivity scan
+            <span className="panel-head-count"> · who is connected to a gateway or subnet, who is down, and where to hop</span>
+          </h2>
+          <div className="history-controls">
+            <select
+              className="topology-input"
+              aria-label="Start from gateway"
+              value={scanRoot}
+              onChange={(event) => setScanRoot(event.target.value)}
+            >
+              <option value="ALL">All gateways</option>
+              {gateways.map((node) => (
+                <option key={node.id} value={node.id}>{node.id} — {node.name}{node.state === "Offline" ? " (down)" : ""}</option>
+              ))}
+            </select>
+            <select
+              className="topology-input"
+              aria-label="Subnet"
+              value={scanZone}
+              onChange={(event) => setScanZone(event.target.value)}
+            >
+              <option value="">Whole mesh</option>
+              {topology?.zones.map((zone) => <option key={zone} value={zone}>Subnet: {zone}</option>)}
+            </select>
+            <div className="filter-chips" role="group" aria-label="Traversal algorithm">
+              {ALGORITHMS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`filter-chip${algorithm === item.id ? " active" : ""}`}
+                  aria-pressed={algorithm === item.id}
+                  onClick={() => setAlgorithm(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <button type="button" className="filter-chip" onClick={() => setView("scan")} disabled={view === "scan"}>
+              Show on graph
+            </button>
+          </div>
+        </header>
+
+        {scanError && <p className="panel-empty" role="alert">{scanError}</p>}
+        {scan && <p className={`panel-empty${scan.rootOnline ? "" : " route-warning"}`}>{scan.message}</p>}
+
+        {scan && (
+          <ul className="history-metrics" aria-label="Scan summary">
+            <li>
+              <span className="route-label">Connected</span>
+              <span className="mono">{scan.connectedCount} / {scan.inScope}</span>
+              <span className="route-hop-meta">max depth {scan.maxDepth}</span>
+            </li>
+            <li>
+              <span className="route-label">Down</span>
+              <span className="mono">{scan.downCount}</span>
+              <span className="route-hop-meta">never entered by the traversal</span>
+            </li>
+            <li>
+              <span className="route-label">Cut off</span>
+              <span className="mono">{scan.cutOffCount}</span>
+              <span className="route-hop-meta">live, but no path to a gateway</span>
+            </li>
+            {scan.root !== "ALL" && (
+              <li>
+                <span className="route-label">Other gateway</span>
+                <span className="mono">{scan.otherGatewayCount}</span>
+                <span className="route-hop-meta">reachable only via another root</span>
+              </li>
+            )}
+            <li>
+              <span className="route-label">{scan.algorithm.toUpperCase()}</span>
+              <span className="mono">{formatNumber(scan.traversalMicroseconds)} µs</span>
+              <span className="route-hop-meta">{scan.totalVisited} nodes visited · O(V + E)</span>
+            </li>
+          </ul>
+        )}
+
+        {scan && scan.hopAdvice.length > 0 && (
+          <div className="route-relays">
+            <span className="route-label">Where to hop</span>
+            <ul>
+              {scan.hopAdvice.map((advice) => (
+                <li key={advice.nodeId}>
+                  <button type="button" className="route-relay" onClick={() => selectNode(advice.nodeId)}>
+                    <span className="mono">{advice.nodeId}</span>
+                    <span>{advice.advice}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="history-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Visit #</th>
+                <th>Node</th>
+                <th>Subnet</th>
+                <th>Status</th>
+                <th>Depth</th>
+                <th>Hop via</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scan?.nodes.map((node) => (
+                <tr key={node.nodeId} className="scan-row" onClick={() => selectNode(node.nodeId)}>
+                  <td className="mono">{node.visitOrder ?? "—"}</td>
+                  <td><span className="mono">{node.nodeId}</span> <span className="route-hop-meta">{node.name}</span></td>
+                  <td>{node.zone}</td>
+                  <td><span className={SCAN_BADGE[node.status].className}>{SCAN_BADGE[node.status].label}</span></td>
+                  <td className="mono">{node.depth ?? "—"}</td>
+                  <td className="mono">{node.hopVia ?? "—"}</td>
+                  <td>{describeScanNode(node)}</td>
+                </tr>
+              ))}
+              {scan && scan.nodes.length === 0 && (
+                <tr className="history-placeholder-row"><td colSpan={7}>No devices in this subnet.</td></tr>
+              )}
+              {!scan && (
+                <tr className="history-placeholder-row"><td colSpan={7}>Loading…</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* 4. Telemetry history */}
       <section className="topology-panel" aria-label="Sensor telemetry history">
         <header className="panel-head">
           <h2>
             Telemetry history
             {history && <span className="panel-head-count"> · {history.sensorName} · {history.macAddress} · {history.zone}</span>}
+            {history?.isCustomRange && (
+              <span className="panel-head-count"> · {formatStamp(history.fromUtc)} – {formatStamp(history.toUtc)}</span>
+            )}
           </h2>
           <div className="history-controls">
             <select
@@ -506,6 +790,26 @@ function TopologyPage() {
             >
               {TIME_RANGES.map((range) => <option key={range.hours} value={range.hours}>{range.label}</option>)}
             </select>
+            {isCustom && (
+              <>
+                <input
+                  type="datetime-local"
+                  className="topology-input"
+                  aria-label="From"
+                  value={customFrom}
+                  max={customTo}
+                  onChange={(event) => { setCustomFrom(event.target.value); setPage(1); }}
+                />
+                <input
+                  type="datetime-local"
+                  className="topology-input"
+                  aria-label="To"
+                  value={customTo}
+                  min={customFrom}
+                  onChange={(event) => { setCustomTo(event.target.value); setPage(1); }}
+                />
+              </>
+            )}
             <select
               className="topology-input"
               aria-label="Sort order"
@@ -584,7 +888,9 @@ function TopologyPage() {
         <footer className="history-foot">
           <span className="panel-head-count">
             {history
-              ? `${formatNumber(history.totalCount)} entries · page ${history.page} of ${history.totalPages} · window read in ${formatNumber(history.windowReadMicroseconds)} µs`
+              ? `${formatNumber(history.totalCount)} entries · page ${history.page} of ${history.totalPages} · ` +
+                `AVL range search touched ${formatNumber(history.nodesVisited)} of ${formatNumber(history.indexedReadings)} indexed readings ` +
+                `(tree height ${history.treeHeight}) in ${formatNumber(history.windowReadMicroseconds)} µs`
               : "0 entries"}
           </span>
           <div className="topology-zoom">

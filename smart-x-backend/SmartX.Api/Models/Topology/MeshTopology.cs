@@ -167,6 +167,17 @@ public class TopologySummary
     public double DijkstraMicroseconds { get; set; }
     public double PrimMicroseconds { get; set; }
 
+    /* ---------- Kruskal cross-check ---------- */
+
+    /// <summary>Total weight of the spanning forest built independently by Kruskal's algorithm.</summary>
+    public double KruskalTotalCost { get; set; }
+
+    public int KruskalEdgeCount { get; set; }
+    public double KruskalMicroseconds { get; set; }
+
+    /// <summary>True when Prim and Kruskal agree on the edge count and the total cost.</summary>
+    public bool MstVerified { get; set; }
+
     /// <summary>Bumped every time a recompute changes at least one route.</summary>
     public int RouteVersion { get; set; }
 

@@ -61,8 +61,22 @@ public class TelemetryHistory
     /// <summary>Reading types this sensor reports, for the metric filter.</summary>
     public List<ReadingType> AvailableReadingTypes { get; set; } = new();
 
-    /// <summary>Time taken to cut the window out of the sorted set and page it.</summary>
+    /// <summary>True when an explicit from/to range was queried rather than "the last N hours".</summary>
+    public bool IsCustomRange { get; set; }
+
+    /// <summary>Time taken to cut the window out of the AVL trees, merge and page it.</summary>
     public double WindowReadMicroseconds { get; set; }
+
+    /* ---------- AVL index figures: how little of the tree the query read ---------- */
+
+    /// <summary>Stored readings indexed in the trees that were queried.</summary>
+    public int IndexedReadings { get; set; }
+
+    /// <summary>Tree nodes the range search touched — the boundary paths plus the results.</summary>
+    public int NodesVisited { get; set; }
+
+    /// <summary>Height of the tallest tree queried: about log₂ of its size, because AVL keeps it balanced.</summary>
+    public int TreeHeight { get; set; }
 }
 
 public class TelemetryHistoryEntry

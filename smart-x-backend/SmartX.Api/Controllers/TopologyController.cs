@@ -70,11 +70,33 @@ public class TopologyController : ControllerBase
         return Ok(_engine.ClearSimulatedFailures());
     }
 
-    /// <summary>A sensor's telemetry history, ordered and paged, with the route each reading took.</summary>
+    /// <summary>
+    /// BFS or DFS from a gateway over the live mesh: every device connected to it
+    /// (optionally within one subnet / zone), which are down, and where to hop.
+    /// </summary>
+    [HttpGet("scan")]
+    public IActionResult Scan(
+        [FromQuery] string? root,
+        [FromQuery] string? zone,
+        [FromQuery] TraversalAlgorithm algorithm = TraversalAlgorithm.Bfs)
+    {
+        var scan = _engine.ScanConnectivity(string.IsNullOrWhiteSpace(root) ? "ALL" : root, zone, algorithm);
+        return scan is null
+            ? NotFound(new { error = $"\"{root}\" is not a gateway. Use a gateway id (e.g. GW-01) or ALL." })
+            : Ok(scan);
+    }
+
+    /// <summary>
+    /// A sensor's telemetry history, ordered and paged, with the route each
+    /// reading took. Pass <c>from</c> and <c>to</c> (ISO 8601) for an exact range
+    /// such as 14:00–16:00, or <c>hours</c> for the last N hours.
+    /// </summary>
     [HttpGet("history")]
     public IActionResult GetHistory(
         [FromQuery] string? key,
         [FromQuery] ReadingType? readingType,
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
         [FromQuery] int hours = 24,
         [FromQuery] HistorySort sort = HistorySort.Newest,
         [FromQuery] int page = 1,
@@ -85,7 +107,17 @@ public class TopologyController : ControllerBase
             return BadRequest(new { error = "Supply a sensor's MAC address or node id as ?key=." });
         }
 
-        var history = _engine.GetTelemetryHistory(key, hours, sort, readingType, page, pageSize);
+        if (from.HasValue != to.HasValue)
+        {
+            return BadRequest(new { error = "Supply both ?from= and ?to=, or neither." });
+        }
+
+        if (from.HasValue && from.Value.ToUniversalTime() >= to!.Value.ToUniversalTime())
+        {
+            return BadRequest(new { error = "?from= must be earlier than ?to=." });
+        }
+
+        var history = _engine.GetTelemetryHistory(key, hours, sort, readingType, page, pageSize, from, to);
         return history is null
             ? NotFound(new { error = $"No sensor matches \"{key}\". Gateways relay telemetry but do not report any." })
             : Ok(history);

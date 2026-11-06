@@ -1370,6 +1370,10 @@ export interface TopologySummary {
   redundantLinks: number;
   dijkstraMicroseconds: number;
   primMicroseconds: number;
+  kruskalTotalCost: number;
+  kruskalEdgeCount: number;
+  kruskalMicroseconds: number;
+  mstVerified: boolean;
   routeVersion: number;
   lastRecomputedUtc: string;
 }
@@ -1488,15 +1492,68 @@ export interface TelemetryHistory {
   metrics: HistoryMetricSummary[];
   routeChanges: RouteChange[];
   availableReadingTypes: ReadingType[];
+  isCustomRange: boolean;
   windowReadMicroseconds: number;
+  indexedReadings: number;
+  nodesVisited: number;
+  treeHeight: number;
 }
 
 export interface HistoryQuery {
   hours?: number;
+  /** ISO timestamps for an exact range (e.g. 14:00–16:00). Both or neither. */
+  from?: string | null;
+  to?: string | null;
   sort?: HistorySort;
   readingType?: ReadingType | null;
   page?: number;
   pageSize?: number;
+}
+
+export type TraversalAlgorithm = "Bfs" | "Dfs";
+export type ScanNodeStatus = "Connected" | "Down" | "OtherGateway" | "CutOff";
+
+export interface ScanNode {
+  nodeId: string;
+  name: string;
+  zone: string;
+  kind: MeshNodeKind;
+  status: ScanNodeStatus;
+  offlineReason: OfflineReason;
+  visitOrder: number | null;
+  depth: number | null;
+  hopVia: string | null;
+  alternateRelays: string[];
+  strandedDependants: number;
+  blockedBy: string[];
+}
+
+export interface HopAdvice {
+  nodeId: string;
+  downRelay: string;
+  hopVia: string | null;
+  hopsToRoot: number | null;
+  advice: string;
+}
+
+export interface ConnectivityScan {
+  root: string;
+  algorithm: TraversalAlgorithm;
+  zone: string | null;
+  rootOnline: boolean;
+  inScope: number;
+  connectedCount: number;
+  downCount: number;
+  otherGatewayCount: number;
+  cutOffCount: number;
+  totalVisited: number;
+  maxDepth: number;
+  nodes: ScanNode[];
+  hopAdvice: HopAdvice[];
+  traversalLinkIds: string[];
+  traversalMicroseconds: number;
+  message: string;
+  generatedUtc: string;
 }
 
 /** The live mesh: nodes, weighted links, the spanning tree and the routing tree. */
@@ -1545,6 +1602,8 @@ export async function getTelemetryHistory(
   const search = buildQuery({
     key,
     hours: query.hours,
+    from: query.from ?? undefined,
+    to: query.to ?? undefined,
     sort: query.sort,
     readingType: query.readingType ?? undefined,
     page: query.page,
@@ -1554,8 +1613,21 @@ export async function getTelemetryHistory(
   return handleResponse<TelemetryHistory>(response);
 }
 
+/** BFS or DFS from a gateway ("ALL" for every gateway): who is connected, who is down, and where to hop. */
+export async function scanConnectivity(
+  root: string,
+  zone: string | null,
+  algorithm: TraversalAlgorithm,
+  signal?: AbortSignal
+): Promise<ConnectivityScan> {
+  const query = buildQuery({ root, zone: zone || undefined, algorithm });
+  const response = await apiFetch(`${API_BASE_URL}/topology/scan${query}`, { signal });
+  return handleResponse<ConnectivityScan>(response);
+}
+
 export default {
   getTopology,
+  scanConnectivity,
   recomputeTopology,
   traceRoute,
   setNodeFailure,

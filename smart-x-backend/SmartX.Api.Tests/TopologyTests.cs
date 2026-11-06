@@ -179,4 +179,121 @@ public class TopologyTests
         // Gateways relay telemetry but report none.
         Assert.Null(engine.GetTelemetryHistory("GW-01", 24, HistorySort.Newest, null, 1, 25));
     }
+
+    [Fact]
+    public void An_exact_time_range_for_one_metric_reads_only_that_metric_inside_the_range()
+    {
+        var (engine, _, store) = EngineFixture.CreateTopology();
+        var sensor = engine.GetTopology().Nodes.First(node => node.Kind == MeshNodeKind.Sensor);
+        var profile = store.FindSensorByNodeId(sensor.Id)!;
+
+        var readings = store.ReadingsFor(profile.Id);
+        var metric = readings.GroupBy(reading => reading.ReadingType).OrderByDescending(group => group.Count()).First().Key;
+
+        // A two-hour slice in the middle of the stored history, e.g. 14:00–16:00.
+        var middle = readings.Where(reading => reading.ReadingType == metric).OrderBy(reading => reading.TimestampUtc).ElementAt(readings.Count(reading => reading.ReadingType == metric) / 2).TimestampUtc;
+        var from = middle.AddHours(-1);
+        var to = middle.AddHours(1);
+
+        var history = engine.GetTelemetryHistory(sensor.Id, 24, HistorySort.Oldest, metric, 1, 200, from, to)!;
+
+        var expected = readings
+            .Where(reading => reading.ReadingType == metric && reading.TimestampUtc >= from && reading.TimestampUtc <= to)
+            .Where(reading => reading.NumericValue.HasValue || reading.BooleanValue.HasValue)
+            .Select(reading => reading.TimestampUtc)
+            .Distinct()
+            .Count();
+
+        Assert.True(history.IsCustomRange);
+        Assert.True(expected > 0);
+        Assert.Equal(expected, history.TotalCount);
+        Assert.All(history.Items, item =>
+        {
+            Assert.Equal(metric, item.ReadingType);
+            Assert.InRange(item.TimestampUtc, from, to);
+        });
+
+        // The AVL range search touched a fraction of the tree, not every reading.
+        Assert.True(history.TreeHeight > 0);
+        Assert.True(history.NodesVisited < history.IndexedReadings, $"{history.NodesVisited} of {history.IndexedReadings}");
+    }
+
+    [Fact]
+    public void Kruskal_and_Prim_agree_on_every_recompute()
+    {
+        var (engine, _, _) = EngineFixture.CreateTopology();
+        var summary = engine.GetTopology().Summary;
+        Assert.True(summary.MstVerified);
+        Assert.Equal(summary.MstEdgeCount, summary.KruskalEdgeCount);
+
+        var relay = engine.GetTopology().CriticalRelays.First();
+        var failed = engine.SetSimulatedFailure(relay.NodeId, failed: true)!.Topology.Summary;
+        Assert.True(failed.MstVerified);
+    }
+
+    [Theory]
+    [InlineData(TraversalAlgorithm.Bfs)]
+    [InlineData(TraversalAlgorithm.Dfs)]
+    public void Scanning_from_every_gateway_finds_every_live_routed_node(TraversalAlgorithm algorithm)
+    {
+        var (engine, _, _) = EngineFixture.CreateTopology();
+        var topology = engine.GetTopology();
+
+        var scan = engine.ScanConnectivity("ALL", null, algorithm)!;
+
+        var routed = topology.Nodes.Where(node => node.Kind == MeshNodeKind.Sensor && node.Hops.HasValue).Select(node => node.Id).Order().ToList();
+        var connected = scan.Nodes.Where(node => node.Status == ScanNodeStatus.Connected).Select(node => node.NodeId).Order().ToList();
+
+        Assert.True(scan.RootOnline);
+        Assert.Equal(routed, connected);
+        Assert.Equal(scan.InScope, scan.ConnectedCount + scan.DownCount + scan.CutOffCount + scan.OtherGatewayCount);
+
+        // Visit order is strictly increasing down the list.
+        var orders = scan.Nodes.Where(node => node.VisitOrder.HasValue).Select(node => node.VisitOrder!.Value).ToList();
+        Assert.Equal(orders.Order(), orders);
+
+        if (algorithm == TraversalAlgorithm.Bfs)
+        {
+            // BFS depth is the fewest hops, so never more than the routed hop count.
+            foreach (var node in scan.Nodes.Where(node => node.Status == ScanNodeStatus.Connected))
+            {
+                Assert.True(node.Depth <= topology.Nodes.Single(item => item.Id == node.NodeId).Hops);
+            }
+        }
+
+        Assert.Null(engine.ScanConnectivity("ENV-001", null, algorithm));
+    }
+
+    [Fact]
+    public void Scanning_after_a_relay_fails_reports_it_down_and_says_where_its_dependants_should_hop()
+    {
+        var (engine, _, _) = EngineFixture.CreateTopology();
+        var relay = engine.GetTopology().CriticalRelays.First();
+        var zone = relay.Zone;
+        engine.SetSimulatedFailure(relay.NodeId, failed: true);
+
+        var scan = engine.ScanConnectivity("ALL", zone, TraversalAlgorithm.Bfs)!;
+
+        Assert.Equal(zone, scan.Zone);
+        Assert.All(scan.Nodes, node => Assert.Equal(zone, node.Zone));
+
+        var down = scan.Nodes.Single(node => node.NodeId == relay.NodeId);
+        Assert.Equal(ScanNodeStatus.Down, down.Status);
+        Assert.Equal(OfflineReason.SimulatedOutage, down.OfflineReason);
+        Assert.Null(down.VisitOrder);
+        Assert.True(down.StrandedDependants > 0);
+
+        // Nodes that were designed to relay through it get a hop recommendation that avoids it.
+        var whole = engine.ScanConnectivity("ALL", null, TraversalAlgorithm.Bfs)!;
+        var advice = whole.HopAdvice.Where(item => item.DownRelay == relay.NodeId).ToList();
+        Assert.NotEmpty(advice);
+        Assert.All(advice, item =>
+        {
+            Assert.NotEqual(relay.NodeId, item.HopVia);
+            Assert.True(item.HopVia is not null || item.HopsToRoot is null);
+        });
+
+        // The traversal tree never passes through the down node.
+        Assert.DoesNotContain(scan.TraversalLinkIds, id => id.Split('|').Contains(relay.NodeId));
+    }
 }

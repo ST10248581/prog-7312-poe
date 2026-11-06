@@ -37,10 +37,25 @@ public interface ISmartXTopologyEngine
     /// <summary>Brings every simulated failure back online.</summary>
     MeshTopology ClearSimulatedFailures();
 
+    /* ---------- Connectivity scan ---------- */
+
+    /// <summary>
+    /// BFS or DFS from a gateway (or "ALL") over the live mesh: which devices in
+    /// the subnet are connected, which are down or cut off, and where nodes whose
+    /// relay is down should hop. Null when <paramref name="root"/> is not a gateway.
+    /// </summary>
+    ConnectivityScan? ScanConnectivity(string root, string? zone, TraversalAlgorithm algorithm);
+
     /* ---------- Telemetry history ---------- */
 
-    /// <summary>A sensor's readings over the window, merged, ordered and paged. Null when the key matches no sensor.</summary>
-    TelemetryHistory? GetTelemetryHistory(string key, int hours, HistorySort sort, ReadingType? readingType, int page, int pageSize);
+    /// <summary>
+    /// A sensor's readings over the window, cut out of its AVL trees, merged,
+    /// ordered and paged. With <paramref name="fromUtc"/> and <paramref name="toUtc"/>
+    /// the window is that exact range (e.g. 14:00–16:00); otherwise it is the last
+    /// <paramref name="hours"/>. Null when the key matches no sensor.
+    /// </summary>
+    TelemetryHistory? GetTelemetryHistory(string key, int hours, HistorySort sort, ReadingType? readingType, int page, int pageSize,
+        DateTime? fromUtc = null, DateTime? toUtc = null);
 
     /* ---------- Live loop ---------- */
 

@@ -1,15 +1,19 @@
 import { useMemo } from "react";
 import type { MeshLink, MeshNode } from "../../services/apiService";
 
-export type ViewMode = "mesh" | "mst" | "route";
+export type ViewMode = "mesh" | "mst" | "route" | "scan";
 
 interface MeshCanvasProps {
   nodes: MeshNode[];
   links: MeshLink[];
   view: ViewMode;
-  /** Link ids of the traced route, highlighted in the "route" view. */
+  /**
+   * Links to emphasise on top of the view: the traced route ("route"), the
+   * traced node's power-efficient path along the MST ("mst"), or the BFS/DFS
+   * traversal tree ("scan").
+   */
   routeLinkIds: string[];
-  /** Node ids on the traced route. */
+  /** Nodes on that highlight; others are dimmed in the "route" and "scan" views. */
   routeNodeIds: string[];
   selectedId: string | null;
   /** Lower-cased zone / node / MAC text; non-matching nodes are dimmed. */
@@ -46,8 +50,8 @@ function MeshCanvas({ nodes, links, view, routeLinkIds, routeNodeIds, selectedId
     if (!link.isActive) classes.push("topology-link-inactive");
 
     if (view === "mst") {
-      classes.push(link.inMst ? "topology-link-mst" : "topology-link-faded");
-    } else if (view === "route") {
+      classes.push(routeLinks.has(link.id) ? "topology-link-route" : link.inMst ? "topology-link-mst" : "topology-link-faded");
+    } else if (view === "route" || view === "scan") {
       classes.push(routeLinks.has(link.id) ? "topology-link-route" : "topology-link-faded");
     } else if (link.inRoutingTree) {
       classes.push("topology-link-tree");
@@ -64,16 +68,17 @@ function MeshCanvas({ nodes, links, view, routeLinkIds, routeNodeIds, selectedId
     if (node.state === "Isolated") classes.push("topology-node-isolated");
     if (node.isRerouted) classes.push("topology-node-rerouted");
     if (node.id === selectedId) classes.push("topology-node-selected");
-    if (!matches(node) || (view === "route" && routeNodes.size > 0 && !routeNodes.has(node.id))) {
+    if (!matches(node) || ((view === "route" || view === "scan") && routeNodes.size > 0 && !routeNodes.has(node.id))) {
       classes.push("topology-node-dim");
     }
     return classes.join(" ");
   };
 
   // Emphasised links are drawn last so they sit on top of the faded ones.
-  const ordered = [...links].sort((a, b) => Number(emphasised(a)) - Number(emphasised(b)));
+  const ordered = [...links].sort((a, b) => emphasised(a) - emphasised(b));
   function emphasised(link: MeshLink) {
-    return view === "mst" ? link.inMst : view === "route" ? routeLinks.has(link.id) : link.inRoutingTree;
+    if (routeLinks.has(link.id) && view !== "mesh") return 2;
+    return view === "mst" ? Number(link.inMst) : view === "mesh" ? Number(link.inRoutingTree) : 0;
   }
 
   return (
